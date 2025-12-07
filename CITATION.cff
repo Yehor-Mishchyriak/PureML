@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: "PureML: a lightweight, NumPy-based deep learning framework"
+message: "If you use PureML in your work, please cite this software."
+type: software
+authors:
+  - family-names: Mishchyriak
+    given-names: Yehor
+    orcid: 0009-0001-8371-7159
+repository-code: https://github.com/Yehor-Mishchyriak/PureML
+url: https://github.com/Yehor-Mishchyriak/PureML
+license: Apache-2.0
+version: 1.2.7
+release-date: 2025-11-09
+keywords: ["deep learning", "numpy", "autodiff", "education"]
+preferred-citation:
+  type: software
+  title: "PureML: a lightweight, NumPy-based deep learning framework"
+  authors:
+    - family-names: Mishchyriak
+      given-names: Yehor
+  url: https://github.com/Yehor-Mishchyriak/PureML

@@ -1,0 +1,6 @@
+include README.md
+include README.MD
+include LICENSE*
+include NOTICE*
+include CITATION.cff
+recursive-include pureml/datasets/MNIST/files *.zarr.zip

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ym-pure-ml"
+version = "1.2.7"
+description = "Transparent, NumPy-only deep learning framework for teaching, small-scale projects, prototyping, and reproducible experiments."
+readme = { file = "README.MD", content-type = "text/markdown" }
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Yehor Mishchyriak" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["numpy", "deep-learning", "autodiff", "education"]
+dependencies = [
+  "numpy>=2.0",
+  "zarr>=3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Yehor-Mishchyriak/PureML"
+Source = "https://github.com/Yehor-Mishchyriak/PureML"
+Tracker = "https://github.com/Yehor-Mishchyriak/PureML/issues"
+
+[project.optional-dependencies]
+tests = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = { find = { where = ["src"], include = ["pureml*"] } }
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.package-data]
+"pureml.datasets.MNIST" = ["files/*.zarr.zip"]

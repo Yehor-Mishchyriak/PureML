@@ -3,4 +3,4 @@ include README.MD
 include LICENSE*
 include NOTICE*
 include CITATION.cff
-recursive-include pureml/datasets/MNIST/files *.zarr.zip
+recursive-include src/pureml/datasets/MNIST/files *.zarr.zip

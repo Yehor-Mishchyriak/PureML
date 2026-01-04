@@ -1,0 +1,51 @@
+# ignore all
+*
+
+# BUT
+# PACKAGE:
+!src/
+!src/pureml/
+!src/pureml/*.py
+# -=-=-=-=-=-=-=--=
+!src/pureml/models/
+!src/pureml/models/*.py
+!src/pureml/models/classical/
+!src/pureml/models/classical/*.py
+!src/pureml/models/neural_networks/
+!src/pureml/models/neural_networks/*.py
+# -=-=-=-=-=-=-=--=
+!src/pureml/datasets/
+!src/pureml/datasets/*.py
+!src/pureml/datasets/MNIST/
+!src/pureml/datasets/MNIST/*.py
+!src/pureml/datasets/MNIST/files/
+!src/pureml/datasets/MNIST/files/*.py
+!src/pureml/datasets/MNIST/files/mnist-28x28_uint8.zarr.zip
+# ---------------------------------------------------------------
+# EXTRAS
+!tests/
+!tests/*.py
+!examples/
+!examples/*.py
+!assets/
+!assets/**
+# ---------------------------------------------------------------
+!.github/
+!.github/workflows/
+!.github/workflows/**
+# ---------------------------------------------------------------
+!.gitignore
+!README.MD
+!CITATION.cff
+!LICENSE
+!NOTICE
+!MANIFEST.in
+!CREDITS.MD
+!docs.md
+!pkg_meta.json
+!pyproject.toml
+# ---------------------------------------------------------------
+# JOSS
+!JOSS/
+!JOSS/**
+# ---------------------------------------------------------------

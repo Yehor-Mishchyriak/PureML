@@ -297,6 +297,12 @@ If you need GPUs, distributed training, or huge model zoos, you should use PyTor
 Issues, enhancement suggestions, and discussions are welcome!
 If you want to contribute new code, please see the [guidelines](https://github.com/Yehor-Mishchyriak/PureML/blob/main/CONTRIBUTING.md).
 
+---
+
+## Code of Conduct
+Please be respectful and constructive in all interactions. By participating in this project you agree to uphold a positive, harassment-free environment for everyone. If you experience or witness unacceptable behavior, please open a confidential issue or contact the [maintainer](https://github.com/Yehor-Mishchyriak) directly.
+
+---
 
 ## License
 

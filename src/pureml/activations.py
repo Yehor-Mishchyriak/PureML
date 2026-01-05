@@ -1,3 +1,4 @@
+"""Activation functions with custom forward/backward implementations."""
 from __future__ import annotations
 
 # third party

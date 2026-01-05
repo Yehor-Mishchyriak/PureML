@@ -1,3 +1,4 @@
+"""Model base classes and helpers for saving/loading trainable state."""
 from __future__ import annotations
 
 # built-in

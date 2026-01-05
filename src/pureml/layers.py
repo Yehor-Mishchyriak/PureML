@@ -7,6 +7,7 @@
 # | In any case, <Tensor>.shape and .dtype are encouraged now.    |   
 #  \-------------------------------------------------------------/
 
+"""Layer base classes and implementations (Affine, Dropout, BatchNorm, Embedding)."""
 from __future__ import annotations
 
 # third party

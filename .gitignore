@@ -41,6 +41,7 @@
 !NOTICE
 !MANIFEST.in
 !CREDITS.MD
+!CONTRIBUTING.MD
 !docs.md
 !pkg_meta.json
 !pyproject.toml

@@ -1,3 +1,4 @@
+"""Loss functions implemented with PureML's autodiff primitives."""
 from __future__ import annotations
 
 # third party

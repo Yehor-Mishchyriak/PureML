@@ -1,3 +1,4 @@
+"""MNIST dataset reader backed by packaged zarr archive."""
 import numpy as np
 from typing import Literal
 from importlib.resources import files, as_file

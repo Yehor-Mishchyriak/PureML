@@ -1,3 +1,4 @@
+"""Data utilities: datasets, dataloaders, batching, and reproducible splits."""
 from __future__ import annotations
 
 # third party

@@ -1,3 +1,6 @@
+"""General math helpers with autodiff-aware primitives (distance, stats, etc.)."""
+from __future__ import annotations
+
 # third party
 import numpy as np
 # built in

@@ -1,3 +1,4 @@
+"""Reference MNIST MLP model (Affine-ReLU-Affine) with training loop."""
 import logging
 
 from ...base import NN

@@ -29,6 +29,7 @@ dependencies = [
 Homepage = "https://github.com/Yehor-Mishchyriak/PureML"
 Source = "https://github.com/Yehor-Mishchyriak/PureML"
 Tracker = "https://github.com/Yehor-Mishchyriak/PureML/issues"
+Documentation = "https://ymishchyriak.com/docs/PUREML-DOCS"
 
 [project.optional-dependencies]
 tests = []

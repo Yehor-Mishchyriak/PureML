@@ -5,6 +5,12 @@
 - Open a focused Pull Request to `main` in the upstream repo. CI must pass before merge.
 - Add/adjust tests when you change behavior and describe the rationale in the PR.
 
+## Reporting Issues
+- Use GitHub Issues with a clear title and description.
+- Include reproduction steps, expected vs. actual behavior, and environment details (OS, Python version).
+- Share minimal code/data to reproduce (or a failing test case).
+- Tag appropriately (bug, enhancement, docs) to help triage.
+
 ## Project Philosophy
 - Dependencies are kept minimal: **only Python stdlib + NumPy + Zarr**. Please do not introduce other libraries.
 - Favor readability first, then efficiency: keep vectorized NumPy where it matters, but make control flow and math easy to follow.

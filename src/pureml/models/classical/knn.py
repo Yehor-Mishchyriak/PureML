@@ -1,4 +1,8 @@
-"""Simple k-Nearest Neighbors classifier built on PureML tensors."""
+"""Simple k-Nearest Neighbors classifier built on PureML tensors.
+
+Supports configurable k, distance function (default Euclidean from `general_math`),
+and optional per-feature standardization. Uses `no_grad` for inference and resolves
+ties by closest distance among tied labels."""
 from __future__ import annotations
 
 # third party

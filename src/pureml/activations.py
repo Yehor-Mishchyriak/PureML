@@ -1,4 +1,8 @@
-"""Activation functions with custom forward/backward implementations."""
+"""Activation functions with explicit forward/grad pairs (TensorValuedFunction-based).
+
+Implements sigmoid, relu, tanh, softmax, and log_softmax with stable numerics, axis support,
+and shape-safe vector-Jacobian products. Grad paths reuse cached forward outputs via node
+contexts when available and fall back to recomputation otherwise."""
 from __future__ import annotations
 
 # third party

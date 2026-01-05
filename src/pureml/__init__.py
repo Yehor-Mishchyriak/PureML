@@ -1,4 +1,7 @@
-"""PureML: a lightweight NumPy-based autodiff and neural network toolkit."""
+"""PureML: NumPy-only autodiff, layers, and minimal DL utilities with bundled datasets/models.
+
+Exposes the core Tensor/Function engine, helper utilities (storage, batching, RNG), reference
+layers/models/datasets, and logging helpers. Modules are lazily imported via __getattr__."""
 # pureml/__init__.py
 from .machinery import (
     Tensor, TensorValuedFunction, GradientNotDefined,

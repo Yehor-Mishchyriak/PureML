@@ -7,7 +7,15 @@
 # | In any case, <Tensor>.shape and .dtype are encouraged now.    |   
 #  \-------------------------------------------------------------/
 
-"""Layer base classes and implementations (Affine, Dropout, BatchNorm, Embedding)."""
+"""Layer stack built on the PureML autodiff core.
+
+Provides a `Layer` base (training mode toggle, parameters/buffers, apply_state),
+and concrete layers:
+- Affine with Xavier init, bias toggle, and seed/buffer metadata (W stored (n, m))
+- Dropout (inverted, cached mask/scale, seedable, mode-aware)
+- BatchNorm1d with running stats buffers and EMA momentum
+- Embedding with optional pad freezing and seedable init
+All layers use `TensorValuedFunction` ops from `machinery` and RNG helpers in `util`."""
 from __future__ import annotations
 
 # third party

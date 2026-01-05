@@ -1,4 +1,9 @@
-"""Utility helpers for storage, randomness, batching, and composition."""
+"""Utility helpers: Zarr-backed ArrayStorage, batching, RNG helpers, and small functional tools.
+
+ArrayStorage wraps LocalStore/ZipStore with compressed `.pureml.zip` archives, per-block metadata,
+and context managers for build/cleanup. Includes batching helpers (`batches_of`), functional
+composition (`compose_steps`), JSON-literal checks for state export, secure seeding (`get_random_seed`,
+`rng_from_seed`), and misc plumbing used across layers/optimizers/dataloaders."""
 from __future__ import annotations
 
 # third party

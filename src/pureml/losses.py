@@ -1,4 +1,9 @@
-"""Loss functions implemented with PureML's autodiff primitives."""
+"""Supervised losses built on PureML's autodiff primitives.
+
+Includes mean squared error, binary cross-entropy (optionally from logits with internal sigmoid),
+and categorical cross-entropy (from logits or probs) with optional label smoothing. Each loss
+is expressed as a `TensorValuedFunction` with cached forward outputs for stable, shape-safe
+gradients (using `_shape_safe_grad` for unbroadcasting)."""
 from __future__ import annotations
 
 # third party

@@ -1,4 +1,8 @@
-"""Data utilities: datasets, dataloaders, batching, and reproducible splits."""
+"""Data utilities: Dataset abstractions, Tensor-backed datasets, batching, and reproducible splits.
+
+`TensorDataset` normalizes samples to Tensors; `DataLoader` batches/iterates with shuffle/drop_last,
+slice-fast path when available, and seeds via `util.get_random_seed`. Includes helpers to stack/
+collate samples, index arrays/Tensors safely, and basic math helpers for batching."""
 from __future__ import annotations
 
 # third party

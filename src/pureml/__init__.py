@@ -1,3 +1,4 @@
+"""PureML: a lightweight NumPy-based autodiff and neural network toolkit."""
 # pureml/__init__.py
 from .machinery import (
     Tensor, TensorValuedFunction, GradientNotDefined,

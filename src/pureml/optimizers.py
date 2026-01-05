@@ -1,3 +1,4 @@
+"""Optimization algorithms and schedulers built on PureML tensors."""
 from __future__ import annotations
 
 # third party

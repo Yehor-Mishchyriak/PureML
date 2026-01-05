@@ -1,3 +1,4 @@
+"""Core tensor class, autodiff engine, and utilities for graph management."""
 from __future__ import annotations
 
 # third party

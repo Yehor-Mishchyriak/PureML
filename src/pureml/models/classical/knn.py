@@ -1,3 +1,4 @@
+"""Simple k-Nearest Neighbors classifier built on PureML tensors."""
 from __future__ import annotations
 
 # third party
@@ -106,4 +107,3 @@ __all__ = [
 
 if __name__ == "__main__":
     pass
-

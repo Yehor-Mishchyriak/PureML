@@ -1,3 +1,4 @@
+"""Utility helpers for storage, randomness, batching, and composition."""
 from __future__ import annotations
 
 # third party

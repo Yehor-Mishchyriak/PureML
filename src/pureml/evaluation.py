@@ -1,3 +1,4 @@
+"""Evaluation utilities for PureML models (e.g., accuracy scoring)."""
 from __future__ import annotations
 
 from .base import BaseModel

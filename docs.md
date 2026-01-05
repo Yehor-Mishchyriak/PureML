@@ -84,6 +84,7 @@ y = Tensor(5)                      # requires_grad=False by default
 - `.dtype`, `.shape`, `.ndim` mirror the underlying NumPy array.
 - `.numpy(copy=True, readonly=False)` returns a safe NumPy view/copy; prefer this over `.data` for read access.
 - `.detach()` returns a new leaf tensor sharing storage with `requires_grad=False`; `.detach_()` toggles in-place. `.requires_grad_(bool)` mirrors PyTorch.
+- Tensor constructor args: `data` (array-like or Tensor), `requires_grad=False`, `dtype=None` (casts input), `copy=False`, `ensure_writable=True` (copies if read-only), `coerce_float_if_grad=True` (ints/bools -> float when tracking grads).
 
 ### Gradient flow
 
@@ -116,11 +117,12 @@ x.zero_grad()         # sets grad to None
 
 ## Activations (`pureml.activations`)
 
-- `sigmoid(x)`
-- `relu(x)`
-- `tanh(x)`
-- `softmax(x, axis=-1)` - stable, axis-aware
-- `log_softmax(x, axis=-1)` - stable, axis-aware
+- `sigmoid(x: Tensor)`  
+- `relu(x: Tensor)`  
+- `tanh(x: Tensor)`  
+- `softmax(x: Tensor, axis=-1)` - stable, axis-aware  
+- `log_softmax(x: Tensor, axis=-1)` - stable, axis-aware  
+All accept any shape; `axis` is the class dimension for softmax/log_softmax. Return Tensors and provide Jacobian-free backward passes.
 
 Each returns a Tensor and has a Jacobian-free backward pass.
 
@@ -130,9 +132,14 @@ Each returns a Tensor and has a Jacobian-free backward pass.
 
 All losses return scalar tensors (mean over all elements/samples).
 
-- `MSE(Y, Y_hat)`: mean squared error.
-- `BCE(Y, Y_hat, from_logits=False, label_smoothing=0.0)`: binary cross-entropy on probabilities or logits (`from_logits=True`). Label smoothing moves targets toward 0.5.
-- `CCE(Y, Y_hat, from_logits=False, label_smoothing=0.0)`: categorical cross-entropy over the last axis. Accepts one-hot/soft labels. `from_logits=True` uses a stable log-softmax. Label smoothing mixes targets toward the uniform distribution over classes.
+- `MSE(Y, Y_hat)`  
+  - `Y`, `Y_hat`: broadcastable tensors. Returns mean squared error over all elements.
+- `BCE(Y, Y_hat, from_logits=False, label_smoothing=0.0)`  
+  - `Y`: targets in {0,1} or probabilities; `Y_hat`: probabilities or logits (set `from_logits=True`).  
+  - `label_smoothing` in [0,1): mixes targets toward 0.5. Returns mean over all elements.
+- `CCE(Y, Y_hat, from_logits=False, label_smoothing=0.0)`  
+  - `Y`: one-hot or soft labels; `Y_hat`: probabilities or logits (`from_logits=True`).  
+  - Operates over the last axis; label smoothing mixes targets toward uniform over classes. Returns mean over batch/classes.
 
 ---
 
@@ -141,16 +148,29 @@ All losses return scalar tensors (mean over all elements/samples).
 Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable state), `.train()/.eval()` toggle `training` and call `on_mode_change`.
 
 - **Affine(fan_in, fan_out, method="xavier-glorot-normal", W=None, b=None, bias=True, seed=None)**  
-  Linear map `Y = X @ W + b`. Stores `W` as shape `(fan_in, fan_out)` (auto-transposes if provided as `(fan_out, fan_in)`). If `bias=False`, keeps a zero bias tensor with `requires_grad=False` and excludes it from `.parameters`. Checkpoint buffers include `method`, `seed`, and `use_bias`. Gradients are always tracked for supplied `W`/`b`.
+  - Linear map `Y = X @ W + b`.  
+  - `W`: optional Tensor shaped `(fan_in, fan_out)` or `(fan_out, fan_in)` (auto-transposed).  
+  - `b`: optional Tensor `(fan_out,)`; ignored when `bias=False`.  
+  - Seeds init via `seed`; buffers persist `method`, `seed`, `use_bias`.  
+  - Gradients are always tracked for supplied `W`/`b`.
 
 - **Dropout(p=0.5, seed=None, training=True)**  
-  Inverted dropout for 1D/2D inputs. Training mode zeros elements with prob `p` and scales survivors by `1/(1-p)`. Eval mode is identity. Buffers store `p`, `seed`, `training`.
+  - Inverted dropout for 1D/2D inputs.  
+  - `p`: drop probability in [0,1]; `seed`: reproducible masks; `training`: initial mode.  
+  - Training zeros elements with prob `p` and scales by `1/(1-p)`; eval is identity. Buffers store `p`, `seed`, `training`.
 
 - **BatchNorm1d(num_features, eps=1e-5, momentum=0.1, gamma=None, beta=None, running_variance=None, running_mean=None, training=True)**  
-  Normalizes `(B, F)` inputs per feature. Training: uses batch mean/var and updates running stats via EMA (`running = (1-momentum)*running + momentum*batch`). Eval: uses running stats. Trainables: `gamma`, `beta`; buffers: `running_mean`, `running_variance`; `eps` is a fixed Tensor.
+  - Normalizes `(B, F)` inputs per feature.  
+  - `eps`: added inside sqrt for stability (stored as Tensor).  
+  - `momentum`: EMA coefficient for running stats (`running = (1-m)*running + m*batch`).  
+  - Optional trainables `gamma`, `beta` (shape `(F,)`); optional buffers to resume `running_mean/variance`.  
+  - Training uses batch stats and updates running; eval uses running only.
 
 - **Embedding(V, D, pad_idx=None, method="xavier-glorot-normal", W=None, training=True, seed=None)**  
-  Lookup table returning `(..., D)` embeddings for integer indices. If `pad_idx` is set, that row is zero-initialized and its gradient is zeroed. Gradients accumulate with `np.add.at` so repeated indices are handled. Buffers persist `padding_idx`, `seed`, `method`.
+  - `V`: vocab size; `D`: embedding dim.  
+  - `pad_idx`: optional int; that row is zeroed and receives no grad.  
+  - `W`: optional Tensor `(V, D)` init; else Xavier/Glorot with `seed`.  
+  - Gradients accumulate correctly for repeated indices. Buffers persist `padding_idx`, `seed`, `method`.
 
 - **Initializer**: `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
 
@@ -158,13 +178,13 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
 
 ## General Math (`pureml.general_math`)
 
-- `euclidean_distance(x, y)` -> scalar L2 distance
-- `mean(X, axis=None)`
-- `deviation(X, axis=-1)` -> `X - mean(X, axis)`
-- `variance(X, axis=-1)`
-- `std(X, axis=-1)` -> sqrt(variance)
-- `sum(X, axis=-1 or None)` (default axis=-1)
-- `ewma(running, current, beta)` -> exponential moving average (used by optimizers/BN)
+- `euclidean_distance(x, y)` -> scalar L2 distance. Args: Tensors `x`, `y`; caches diff and norm.
+- `mean(X, axis=None)` -> mean over axis (None means all elements). Returns broadcastable grad (1/N).
+- `deviation(X, axis=-1)` -> `X - mean(X, axis)`. Caches mean for backward.
+- `variance(X, axis=-1)` -> mean of squared deviations along axis. Grad scales by `2/N * dev`.
+- `std(X, axis=-1)` -> sqrt(var + 1e-12) along axis. Grad uses cached std/dev.
+- `sum(X, axis=-1 or None)` -> sum over axis; grad broadcasts upstream.
+- `ewma(running, current, beta)` -> exponential moving average `beta*running + (1-beta)*current`.
 
 All return Tensors with gradient support and honor the specified axis (negative axes allowed). Defaults: `mean` reduces over all elements when `axis=None`; `variance/std/sum` default to `axis=-1`.
 
@@ -186,10 +206,15 @@ for batch in loader:
     ...
 ```
 
+- Args:
+  - `dataset`: implements `__len__` and `__getitem__` (int or slice).
+  - `batch_size`: items per batch (must be > 0).
+  - `shuffle`: if True, shuffles indices each epoch using an internal `random.Random`.
+  - `drop_last`: drop final incomplete batch when True.
+  - `combine_samples_fn`: how to collate a list of samples; defaults to `combine_samples`.
+  - `seed`: optional int; if set, shuffling is reproducible. If omitted, a secure seed from `util.get_random_seed()` is used.
 - If the dataset supports slicing and `shuffle=False`, batches are contiguous slices (fast path). Otherwise indices are batched (supports shuffling).
 - `__len__` returns the number of batches (drops the last incomplete batch when `drop_last=True`).
-- `combine_samples_fn` controls how a list of samples is collated; defaults to `combine_samples`.
-- Shuffling uses an internal `random.Random` seeded via `pureml.util.get_random_seed()` (the `seed` argument is currently not applied).
 
 ### Collation helpers
 
@@ -224,7 +249,11 @@ Mode propagation matters for layers like Dropout/BatchNorm and for `MNIST_BEATER
 
 ## Evaluation (`pureml.evaluation`)
 
-- `accuracy(model, test_set, batch_size=32)`: top-1 accuracy. Handles logits/probabilities `(B, C)` by argmax over the last axis, or class indices `(B,)` directly. Targets can be one-hot or indices. Temporarily switches the model to eval mode (if available) and restores the previous mode.
+- `accuracy(model, test_set, batch_size=32)`: top-1 accuracy.  
+  - `model`: PureML model implementing `__call__/predict` and optional `train()/eval()`.  
+  - `test_set`: Dataset yielding `(X, Y)`; Y can be one-hot or class indices.  
+  - `batch_size`: DataLoader batch size.  
+  Handles logits/probabilities `(B, C)` by argmax over last axis, or class indices `(B,)` directly. Temporarily switches the model to eval mode and restores the prior mode.
 
 ---
 
@@ -246,15 +275,24 @@ Common features:
 - `zero_grad()` sets every parameter’s `.grad` to `None`.
 
 Optimizers:
-- **SGD(model_params, lr, beta=0.0, weight_decay=0.0, decoupled_wd=True)** - optional momentum (`beta`) with exponential moving average `v`.
-- **AdaGrad(model_params, lr, weight_decay=0.0, delta=1e-7, decoupled_wd=True)** - accumulates squared grads `r` and scales by `1/sqrt(r+delta)`.
-- **RMSProp(model_params, lr, weight_decay=0.0, beta=0.9, delta=1e-6, decoupled_wd=True)** - EMA of squared grads `r`.
-- **Adam(model_params, lr, weight_decay=0.0, beta1=0.9, beta2=0.999, delta=1e-8, decoupled_wd=True)** - first/second moments with bias correction; global step counter `_t` increments each `step()`.
+- **SGD(model_params, lr, beta=0.0, weight_decay=0.0, decoupled_wd=True)**  
+  - `lr`: learning rate; `beta`: momentum (0 disables momentum).  
+  - `weight_decay`: L2; `decoupled_wd=True` applies AdamW-style decay, else coupled.  
+  - Slots: momentum buffer `_v`.
+- **AdaGrad(model_params, lr, weight_decay=0.0, delta=1e-7, decoupled_wd=True)**  
+  - `delta`: epsilon for numerical stability.  
+  - Slots: accumulator `_r` of squared grads.
+- **RMSProp(model_params, lr, weight_decay=0.0, beta=0.9, delta=1e-6, decoupled_wd=True)**  
+  - `beta`: EMA coefficient for squared grads; `delta`: epsilon.  
+  - Slots: accumulator `_r`.
+- **Adam(model_params, lr, weight_decay=0.0, beta1=0.9, beta2=0.999, delta=1e-8, decoupled_wd=True)**  
+  - `beta1`, `beta2`: EMA coefficients for first/second moments; `delta`: epsilon.  
+  - Slots: `_v` (first moment), `_r` (second moment), `_t` (step counter).
 
 Learning-rate schedulers (operate in-place on attached optimizer’s `lr`):
-- **StepLR(optim, step_size, gamma=0.1, last_step=-1)**: piecewise-constant decay every `step_size` steps.
-- **ExponentialLR(optim, gamma, last_step=-1)**: smooth per-step decay.
-- **CosineAnnealingLR(optim, T_max, eta_min=0.0, last_step=-1)**: half-cosine from `base_lr` to `eta_min` over `T_max` steps. `step(n)` advances by `n` steps (default 1) and returns the new lr.
+- **StepLR(optim, step_size, gamma=0.1, last_step=-1)**: decay `lr *= gamma` every `step_size` steps. `last_step` lets you resume. `step(n)` advances by `n` (default 1).
+- **ExponentialLR(optim, gamma, last_step=-1)**: smooth per-step decay `lr *= gamma` each `step()`. `last_step` for resume.
+- **CosineAnnealingLR(optim, T_max, eta_min=0.0, last_step=-1)**: half-cosine from `base_lr` to `eta_min` over `T_max` steps; repeats every `T_max`. `step(n)` advances by `n` and returns new lr.
 
 ---
 
@@ -302,6 +340,7 @@ test  = MnistDataset("test")    # (Tensor image, class index)
 ```
 
 - Backed by packaged resource `mnist-28x28_uint8.zarr.zip` (opened via `ArrayStorage` in read-only mode).
+- Args: `mode` in {"train","test"}.  
 - Images are float32 in `[0, 1]` (divided by 255).
 - Training labels are one-hot encoded to length 10; test labels are class indices.
 - Implements context manager to close the underlying store.

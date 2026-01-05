@@ -1,4 +1,8 @@
-"""Evaluation utilities for PureML models (e.g., accuracy scoring)."""
+"""Evaluation helpers for PureML models.
+
+Currently provides top-1 accuracy over a Dataset via DataLoader batching, respecting model
+train/eval mode toggles, using `no_grad`, and handling logits/probs (argmax) or class-index
+outputs as well as one-hot targets."""
 from __future__ import annotations
 
 from .base import BaseModel

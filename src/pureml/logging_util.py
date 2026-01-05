@@ -1,4 +1,4 @@
-"""Logging configuration helper for rotating file/console output."""
+"""Logging configuration helper: sets up timed rotating file + console handlers with levels and fmt."""
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path

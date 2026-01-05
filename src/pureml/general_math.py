@@ -1,4 +1,7 @@
-"""General math helpers with autodiff-aware primitives (distance, stats, etc.)."""
+"""Autodiff-aware math utilities: EWMA helpers plus distance/stat ops backed by custom VJPs.
+
+Provides Euclidean distance, mean/deviation/variance/std/sum with axis support and cached
+intermediates, all exposed as `TensorValuedFunction` wrappers with shape-safe gradients."""
 from __future__ import annotations
 
 # third party

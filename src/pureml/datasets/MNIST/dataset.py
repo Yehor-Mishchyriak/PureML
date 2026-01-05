@@ -1,4 +1,8 @@
-"""MNIST dataset reader backed by packaged zarr archive."""
+"""MNIST dataset reader backed by the packaged Zarr archive.
+
+Uses `importlib.resources.files` to locate the zipped store bundled in the wheel, opens it via
+ArrayStorage in read-only mode, and returns Tensor pairs: images scaled to float32 in [0,1] and
+one-hot labels for train (class indices for test). Implements context manager to close the store."""
 import numpy as np
 from typing import Literal
 from importlib.resources import files, as_file

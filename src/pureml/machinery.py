@@ -1,4 +1,8 @@
-"""Core tensor class, autodiff engine, and utilities for graph management."""
+"""Autodiff core: `Tensor` wraps NumPy arrays, `TensorValuedFunction` represents graph nodes,
+and reverse-mode backprop walks the creator graph with per-node forward context caching.
+Backprop seeds ones by default, unbroadcasts gradients to input shapes, frees cached ctx,
+and respects `no_grad` via a contextvar. Includes low-level math ops (elemwise, matmul,
+reshape/flatten, slicing with scatter-add backward) plus helpers for shape-safe grads."""
 from __future__ import annotations
 
 # third party

@@ -1,4 +1,8 @@
-"""Optimization algorithms and schedulers built on PureML tensors."""
+"""Optimizers and schedulers for PureML tensors with checkpointable state.
+
+Implements SGD, AdaGrad, RMSProp, and Adam plus LR schedulers (StepLR, ExponentialLR,
+CosineAnnealingLR). Optim states (hypers and per-param slots) persist via ArrayStorage
+alongside current parameters to guarantee reproducible restarts."""
 from __future__ import annotations
 
 # third party

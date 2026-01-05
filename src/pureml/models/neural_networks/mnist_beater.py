@@ -1,4 +1,8 @@
-"""Reference MNIST MLP model (Affine-ReLU-Affine) with training loop."""
+"""Reference MNIST MLP model (Affine-ReLU-Affine) with training loop.
+
+Defines a tiny network (784→256→10) using Affine+ReLU blocks, SGD optimizer,
+and CCE loss. `predict` returns logits in train mode and class indices in eval;
+`fit` trains over a Dataset via DataLoader with shuffling and zeroing grads per step."""
 import logging
 
 from ...base import NN

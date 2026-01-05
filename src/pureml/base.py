@@ -1,4 +1,9 @@
-"""Model base classes and helpers for saving/loading trainable state."""
+"""Model bases and state helpers.
+
+`BaseModel`/`NN` define the fit/predict contract, training/eval mode propagation across contained
+`Layer`s, collection of parameters/buffers, and ArrayStorage-backed save/load of params or full
+state (including literals). Helpers gather named params/buffers and provide convenience loaders
+to resume from `.pureml.zip` artifacts."""
 from __future__ import annotations
 
 # built-in

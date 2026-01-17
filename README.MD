@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 [![Docs](https://img.shields.io/badge/docs-available-blue)](https://ymishchyriak.com/docs/PUREML-DOCS)
 [![status](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff/status.svg)](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff)
-[![DOI](https://zenodo.org/badge/1075099500.svg)](https://doi.org/10.5281/zenodo.18277558)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18277559.svg)](https://doi.org/10.5281/zenodo.18277559)
 
 ![LOGO](https://raw.githubusercontent.com/Yehor-Mishchyriak/PureML/main/assets/PureML_Logo_cropped.png)
 

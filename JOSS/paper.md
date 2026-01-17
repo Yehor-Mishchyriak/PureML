@@ -13,7 +13,7 @@ authors:
     email: ymishchyriak@wesleyan.edu
     affiliation: 1
 affiliations:
-  - name: Department of Mathematics and Computer Science at Wesleyan University, Middletown, CT, United States
+  - name: Department of Mathematics and Computer Science, Wesleyan University, Middletown, CT, United States
     index: 1
 date: 1 December 2025
 bibliography: paper.bib

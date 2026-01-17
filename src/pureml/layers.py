@@ -699,6 +699,15 @@ class BatchNorm1d(Layer):
         _logger.debug("BN1d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
+class LayerNorm1d(Layer):
+    """Layer Normalization for 2D inputs shaped (B, F).
+
+    Normalizes each sample across features:
+        y = gamma * (x - mu) / sqrt(var + eps) + beta
+    """
+
+    pass  # Implementation omitted for now
+
 class Embedding(Layer):
     """Learned lookup table: returns rows of `W` for integer indices.
 
@@ -926,6 +935,141 @@ class Embedding(Layer):
         
         return out
 
+class Conv1d(Layer):
+    """1D Convolutional layer.
+
+    Args:
+        in_channels: Number of input channels.
+        out_channels: Number of output channels.
+        kernel_size: Size of the convolutional kernel.
+        stride: Stride of the convolution.
+        padding: Padding added to both sides of input.
+        dilation: Spacing between kernel elements.
+        bias: Whether to include a bias term.
+        method: Initialization method for weights.
+        training: Initial mode flag.
+        seed: Optional RNG seed for initialization.
+    """
+
+    pass  # Implementation omitted for now
+
+class Conv2d(Layer):
+    """2D Convolutional layer.
+
+    Args:
+        in_channels: Number of input channels.
+        out_channels: Number of output channels.
+        kernel_size: Size of the convolutional kernel (height, width).
+        stride: Stride of the convolution (height, width).
+        padding: Padding added to both sides of input (height, width).
+        dilation: Spacing between kernel elements (height, width).
+        bias: Whether to include a bias term.
+        method: Initialization method for weights.
+        training: Initial mode flag.
+        seed: Optional RNG seed for initialization.
+    """
+
+    pass  # Implementation omitted for now
+
+class MaxPool1d(Layer):
+    """1D Max Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel.
+        stride: Stride of the pooling operation.
+        padding: Padding added to both sides of input.
+    """
+
+    pass  # Implementation omitted for now
+
+class MaxPool2d(Layer):
+    """2D Max Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel (height, width).
+        stride: Stride of the pooling operation (height, width).
+        padding: Padding added to both sides of input (height, width).
+    """
+
+    pass  # Implementation omitted for now
+
+class MeanPool1d(Layer):
+    """1D Mean Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel.
+        stride: Stride of the pooling operation.
+        padding: Padding added to both sides of input.
+    """
+
+    pass  # Implementation omitted for now
+
+class MeanPool2d(Layer):
+    """2D Mean Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel (height, width).
+        stride: Stride of the pooling operation (height, width).
+        padding: Padding added to both sides of input (height, width).
+    """
+
+    pass  # Implementation omitted for now
+
+class SumPool1d(Layer):
+    """1D Sum Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel.
+        stride: Stride of the pooling operation.
+        padding: Padding added to both sides of input.
+    """
+
+    pass  # Implementation omitted for now
+
+class SumPool2d(Layer):
+    """2D Sum Pooling layer.
+
+    Args:
+        kernel_size: Size of the pooling kernel (height, width).
+        stride: Stride of the pooling operation (height, width).
+        padding: Padding added to both sides of input (height, width).
+    """
+
+    pass  # Implementation omitted for now
+
+class Sequential(Layer):
+    """Container for stacking layers sequentially.
+
+    Args:
+        layers: Iterable of Layer instances to apply in sequence.
+        training: Initial mode flag.
+    """
+
+    pass  # Implementation omitted for now
+
+class Recurrent(Layer):
+    """Container for applying a layer recurrently over time steps.
+
+    Args:
+        layer: Layer instance to apply at each time step.
+        training: Initial mode flag.
+    """
+
+    pass  # Implementation omitted for now
+
+class Attention(Layer):
+    """Attention mechanism layer.
+
+    Args:
+        query_dim: Dimension of the query vectors.
+        key_dim: Dimension of the key vectors.
+        value_dim: Dimension of the value vectors.
+        num_heads: Number of attention heads.
+        training: Initial mode flag.
+    """
+
+    pass  # Implementation omitted for now
+
 
 __all__ = [
     "xavier_glorot_normal",
@@ -933,7 +1077,18 @@ __all__ = [
     "Affine",
     "Dropout",
     "BatchNorm1d",
-    "Embedding"
+    "Embedding",
+    "Conv1d",
+    "Conv2d",
+    "MaxPool1d",
+    "MaxPool2d",
+    "MeanPool1d",
+    "MeanPool2d",
+    "SumPool1d",
+    "SumPool2d",
+    "Sequential",
+    "Recurrent",
+    "Attention",
 ]
 
 if __name__ == "__main__":

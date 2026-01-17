@@ -31,7 +31,10 @@ The only runtime deps are: `numpy`, `zarr`
 
 ---
 
-# UPDATES:
+# UPDATES: [(skip update messages)](#quickstart-fit-mnist-in-a-few-lines)
+
+## v1.2.8 — What’s new
+- **Modernization of packaging and CI/CD, documentation and attribution fixes, and the addition of community guidelines.**
 
 ## v1.2.7 — What’s new
 - **BUG FIX: DataLoader's seed**

@@ -5,6 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 [![Docs](https://img.shields.io/badge/docs-available-blue)](https://ymishchyriak.com/docs/PUREML-DOCS)
 [![status](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff/status.svg)](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18277559-blue)](https://doi.org/10.5281/zenodo.18277559)
 
 ![LOGO](https://raw.githubusercontent.com/Yehor-Mishchyriak/PureML/main/assets/PureML_Logo_cropped.png)
 
@@ -31,7 +32,7 @@ The only runtime deps are: `numpy`, `zarr`
 
 ---
 
-# UPDATES: [(skip update messages)](#quickstart-fit-mnist-in-a-few-lines)
+# UPDATES:
 
 ## v1.2.8 — What’s new
 - **Modernization of packaging and CI/CD, documentation and attribution fixes, and the addition of community guidelines.**

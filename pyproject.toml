@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ym-pure-ml"
-version = "1.2.7"
+version = "1.2.8"
 description = "Transparent, NumPy-only deep learning framework for teaching, small-scale projects, prototyping, and reproducible experiments."
 readme = { file = "README.MD", content-type = "text/markdown" }
 requires-python = ">=3.11"

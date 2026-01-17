@@ -9,7 +9,7 @@ from .machinery import (
 )
 from .util import ArrayStorage, compose_steps, batches_of
 
-__version__ = "1.2.7"
+__version__ = "1.2.8"
 
 # expose subpackages on demand
 def __getattr__(name):

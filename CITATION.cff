@@ -9,8 +9,8 @@ authors:
 repository-code: https://github.com/Yehor-Mishchyriak/PureML
 url: https://github.com/Yehor-Mishchyriak/PureML
 license: Apache-2.0
-version: 1.2.7
-release-date: 2025-11-09
+version: 1.2.8
+release-date: 2026-1-17
 keywords: ["deep learning", "numpy", "autodiff", "education"]
 preferred-citation:
   type: software

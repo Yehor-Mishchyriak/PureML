@@ -20,16 +20,16 @@ bibliography: paper.bib
 ---
 
 # Summary
-PureML is a compact deep-learning framework implemented entirely in NumPy. It provides a tensor type with reverse-mode automatic differentiation, core neural-network layers and losses, optimizers and learning-rate schedulers, activations, training utilities, and persistence for model and optimizer states. A packaged MNIST dataset makes it easy to benchmark or teach end-to-end.
+PureML is a compact deep-learning framework implemented entirely in NumPy. It provides a tensor type with reverse-mode automatic differentiation, core neural-network layers and losses, optimizers and learning-rate schedulers, activations, training utilities, and persistence for model and optimizer states. A packaged MNIST dataset makes it easy to benchmark or teach end-to-end [@lecun1998mnist].
 
-Who it is for: (1) learners and instructors who need a small, auditable codebase to illustrate end-to-end training; (2) researchers prototyping or auditing algorithms without the overhead of multi-language stacks; and (3) CPU-only or minimal-dependency environments where installing PyTorch, TensorFlow/Keras, or JAX is impractical.
+PureML is for learners and instructors who need a small, auditable codebase to illustrate end-to-end training; researchers prototyping or auditing algorithms without the overhead of multi-language stacks; and CPU-only or minimal-dependency environments where installing PyTorch, TensorFlow/Keras, or JAX is impractical.
 
 # Statement of need
-Modern deep-learning libraries such as PyTorch, TensorFlow/Keras, and JAX provide rich ecosystems but are conceptually and operationally heavy for teaching low-level ML theory, code reading, or CPU-only environments [@paszke2019pytorch; @abadi2016tensorflow; @chollet2015keras; @bradbury2018jax]. Pedagogical materials (including standard texts like *Deep Learning* [@goodfellow2016deep]) often rely on pseudo-code or small snippets that omit practical details: broadcasting semantics, batching, parameter persistence, computational graph construction, vectorization, gradient accumulation, checkpointing, etc. As a result, learners struggle to bridge the gap to real systems. At the other end of the spectrum, educational projects like `micrograd` [@karpathy2020micrograd] purposefully keep the scope tiny, and minimalist systems like `tinygrad` [@tinygrad2024] assume a systems background: `tinygrad` is engineered like a compiler to optimize kernels and targets performance and low-level optimization over didactic readability, effectively teaching how to build PyTorch. Projects like `numpy-ml` [@bourgin2019numpyml] offer a broad catalog of algorithms implemented in NumPy but are not built around an autodiff engine and are not aimed at performance; they serve as references rather than frameworks for training deep networks.
+Modern deep-learning libraries such as PyTorch, TensorFlow/Keras, and JAX provide rich ecosystems but are conceptually and operationally heavy for teaching low-level ML theory, code reading, or CPU-only environments [@paszke2019pytorch; @abadi2016tensorflow; @chollet2015keras; @jax2018github]. Pedagogical materials (including standard texts like *Deep Learning* [@Goodfellow-et-al-2016]) often rely on pseudo-code or small snippets that omit practical details: broadcasting semantics, batching, parameter persistence, computational graph construction, vectorization, gradient accumulation, checkpointing, etc. As a result, learners struggle to bridge the gap to real systems. At the other end of the spectrum, educational projects like `micrograd` [@karpathy2020micrograd] purposefully keep the scope tiny, and minimalist systems like `tinygrad` [@tinygrad2024] assume a systems background: `tinygrad` is engineered like a compiler to optimize kernels and targets performance and low-level optimization over didactic readability, effectively teaching how to build PyTorch. Projects like `numpy-ml` [@bourgin2019numpyml] offer a broad catalog of algorithms implemented in NumPy but are not built around an autodiff engine and are not aimed at performance; they serve as references rather than frameworks for training deep networks.
 
 PureML aims to sit between these extremes: small enough to audit end-to-end, but feature-complete enough for nontrivial models. The code remains transparent while supporting batch-vectorized computation, dynamic computational graphs, forward pass caching, persistence, and related functionality. It focuses on:
 
-- Explicit reverse-mode autodiff with readable vector-Jacobian products for every operation, so gradient flow is inspectable.
+- Explicit reverse-mode autodiff with readable vector-Jacobian products (VJPs) for every operation, so gradient flow is inspectable.
 - Minimal runtime dependencies (NumPy and zarr) suitable for laptops, classrooms, and CPU-only servers [@harris2020numpy; @zarrpython2025].
 - Ready-to-run MNIST example to demonstrate end-to-end training without additional downloads [@lecun1998mnist].
 - Persistence utilities that round-trip models, optimizer slots, and data for reproducible exercises or small experiments.
@@ -41,7 +41,7 @@ PureML aims to sit between these extremes: small enough to audit end-to-end, but
 
 **Layers and losses.** The library supplies `Affine`, `Dropout`, `BatchNorm1d`, and `Embedding` layers. Losses include mean squared error, binary cross-entropy (probabilities or logits), and categorical cross-entropy with optional label smoothing. Stable softmax and log-softmax implementations avoid overflow.
 
-**Optimization stack.** Optimizers (SGD with momentum, AdaGrad, RMSProp, Adam/AdamW) share a common interface, support coupled or decoupled weight decay, and persist optimizer slots via `save_state`/`load_state`. Lightweight schedulers (step, exponential, cosine annealing) operate in-place on optimizer learning rates.
+**Optimization stack.** Optimizers (SGD [@robbins1951stochastic] with momentum, AdaGrad [@duchi2011adagrad], RMSProp [@tieleman2012rmsprop], Adam/AdamW [@kingma2015adam]) share a common interface, support coupled or decoupled weight decay, and persist optimizer slots via `save_state`/`load_state`. Lightweight schedulers (step, exponential, cosine annealing [@loshchilov2016sgdr]) operate in-place on optimizer learning rates.
 
 **Data utilities and models.** A `Dataset` protocol, `TensorDataset`, and `DataLoader` (with slicing fast paths and optional shuffling) simplify input pipelines. The bundled `MnistDataset` streams compressed images/labels from a packaged zarr archive [@lecun1998mnist]. Example models include a small fully connected MNIST classifier (`MNIST_BEATER`) and a classical k-nearest neighbors classifier.
 
@@ -123,17 +123,17 @@ print(f"Test accuracy: {acc * 100}")
 `SAWNERGY` project builds its skip-gram embedding pipeline for amino acid interaction networks using PureML ([link](https://github.com/Yehor-Mishchyriak/SAWNERGY/blob/main/sawnergy/embedding/SGNS_pml.py)).
 
 # Availability
-Source code: https://github.com/Yehor-Mishchyriak/PureML  
-PyPI: https://pypi.org/project/ym-pure-ml/  
-Documentation: https://ymishchyriak.com/docs/PUREML-DOCS  
-License: Apache-2.0 (see `LICENSE`)
+Source code is available at https://github.com/Yehor-Mishchyriak/PureML.  
+The package is published on PyPI at https://pypi.org/project/ym-pure-ml/.  
+Documentation is available at https://ymishchyriak.com/docs/PUREML-DOCS.  
+The license is Apache-2.0.
 
 # Future directions
 Planned extensions include convolutional, recurrent, and message-passing layers, attention mechanisms, additional activation and loss functions, richer evaluation metrics, and related tooling to support a broader range of deep-learning experiments. 
 
 # Acknowledgements
 I am grateful to Professor Kelly M. Thayer (Wesleyan University) for guidance and constructive feedback on this project.
-I also acknowledge the authors of the *Deep Learning* textbook, which informed the design and pedagogy of PureML [@goodfellow2016deep].
+I also acknowledge the authors of the *Deep Learning* textbook, which informed the design and pedagogy of PureML [@Goodfellow-et-al-2016].
 This work was supported by the National Science Foundation under Grant No. CHE-2320718.
 
 # References

@@ -118,6 +118,28 @@ class TestMatrixOps(ut.TestCase):
         # dX = transpose(ones_like(Y))
         np.testing.assert_allclose(X.grad, np.ones_like(X.data), rtol=1e-6, atol=1e-8)
 
+    def test_general_transpose_forward_and_backward(self):
+        rng = _rng(10)
+        X = pm.Tensor(rng.standard_normal((2, 3, 4)), requires_grad=True)
+        order = (2, 0, 1)
+        Y = X.general_transpose(order)
+
+        expected = np.transpose(X.data, order)
+        self.assertEqual(Y.data.shape, expected.shape)
+        np.testing.assert_allclose(Y.data, expected, rtol=1e-6, atol=1e-8)
+
+        upstream = rng.standard_normal(Y.data.shape)
+        Y.backward(upstream)
+
+        inv = tuple(np.argsort(order))
+        grad_expected = np.transpose(upstream, inv)
+        np.testing.assert_allclose(X.grad, grad_expected, rtol=1e-6, atol=1e-8)
+
+    def test_general_transpose_invalid_order_raises(self):
+        X = pm.Tensor(np.zeros((2, 3, 4)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.general_transpose((0, 1))  # wrong rank
+
 class TestReshapeFlatten(ut.TestCase):
     def test_reshape_backward(self):
         rng = _rng(6)

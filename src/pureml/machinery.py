@@ -387,6 +387,9 @@ class Tensor:
     def flatten(self, *, keep_batch: bool = True, sample_ndim: int | None = None) -> Tensor:
         return flatten(self, keep_batch=keep_batch, sample_ndim=sample_ndim)
     
+    def general_transpose(self, order: tuple[int, ...]) -> Tensor:
+        return TensorValuedFunction(_general_transpose, _general_transpose_grad)(self, order=order)
+    
     # AUXILIARY OPS
     def argmax(self, axis: int | None = None, keepdims: bool = False) -> Tensor:
         """Indices of max values along `axis` (non-differentiable)."""
@@ -941,6 +944,41 @@ def _slice_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | Non
     g = np.zeros_like(x)
     np.add.at(g, index, upstream_grad)
     return (g,)
+
+def _general_transpose(X: np.ndarray, *, order: tuple[int, ...], context: dict | None = None) -> np.ndarray:
+    # Example:
+    # Say original order is (0, 1, 2, 3)
+    # New order is (3, 0, 1, 2)                  (3)     (0)     (1)     (2)
+    # So to restore the original, we need to move 0 -> 3, 1 -> 0, 2 -> 1, 3 -> 2,
+    # which is inverse_order := (1, 2, 3, 0) = tuple(np.argsort(order)), which is sorting, but by index,
+    # that is, if you apply fancy indexing you will get the sorted array (0, 1, 2, 3) -- exactly the order we want.
+    # This answers the question "how should the indices be permuted so that the contents are sorted."
+    try:
+        out = X.transpose(order)
+    except ValueError:
+        raise ValueError("Axes don't match array")
+    except Exception:
+        raise
+    #                                    |
+    #                              Note: V we use lambda to cache lazily in case .backward is never called
+    _update_ctx(context, inv_order=lambda: tuple(np.argsort(order)), out=None, overwrite=False)
+
+    return out
+
+@_shape_safe_grad
+def _general_transpose_grad(upstream: np.ndarray, X: np.ndarray, order: tuple[int, ...] | None = None, *, context: dict | None = None):
+    ctx = context or {}
+
+    inv_order = ctx.get("inv_order")
+    if inv_order is None:
+        raise RuntimeError("The inverse order is missing; it must be cached during the forward pass")
+    if callable(inv_order):
+        inv_order = inv_order()
+
+    grad = upstream.transpose(inv_order)
+
+    return (grad,)
+
 
 __all__ = [
     "GradientNotDefined",

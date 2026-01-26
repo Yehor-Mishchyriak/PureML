@@ -12,7 +12,7 @@
 Provides a `Layer` base (training mode toggle, parameters/buffers, apply_state),
 and concrete layers:
 - Affine with Xavier init, bias toggle, and seed/buffer metadata (W stored (n, m))
-- Dropout (inverted, cached mask/scale, seedable, mode-aware)
+- Dropout (1 and 2 -D) (inverted, cached mask/scale, seedable, mode-aware)
 - BatchNorm1d with running stats buffers and EMA momentum
 - Embedding with optional pad freezing and seedable init
 All layers use `TensorValuedFunction` ops from `machinery` and RNG helpers in `util`."""
@@ -22,13 +22,14 @@ from __future__ import annotations
 import numpy as np
 # built-in
 from abc import ABC, abstractmethod
+from math import floor
 import logging
 # local
 from .machinery import (
     Tensor, TensorValuedFunction, _shape_safe_grad, _update_ctx, sqrt
 )
 from . import general_math
-from .util import rng_from_seed
+from .util import rng_from_seed, validate_layer_contract
 
 # *----------------------------------------------------*
 #                        GLOBALS
@@ -122,6 +123,9 @@ class Layer(ABC):
         """Return mapping of buffer-name -> Tensor/ndarray (non-trainable). Default: {}."""
         return {}
 
+    def _validate_contract(self) -> None:
+        validate_layer_contract(self, tensor_type=Tensor)
+
     def apply_state(
         self,
         *,
@@ -129,6 +133,7 @@ class Layer(ABC):
         buffers: dict[str, np.ndarray] | None = None,
     ) -> None:
         """Default in-place state load: writes arrays into `parameters` and `named_buffers()` Tensors."""
+        self._validate_contract()
         # write trainables in-order
         if tunable:
             for t, arr in zip(self.parameters, tunable):
@@ -260,6 +265,7 @@ class Affine(Layer):
 
         Raises:
             ValueError: If the number or shapes of arrays are incompatible."""
+        self._validate_contract()
 
         if buffers:
             if "use_bias" in buffers and buffers["use_bias"] is not None:
@@ -493,6 +499,7 @@ class Dropout(Layer):
                 - ``"p"`` (float): drop probability in ``[0, 1]``
                 - ``"training"`` (int/bool): set module mode
                 - ``"seed"`` (int): resets the RNG used to sample masks"""
+        self._validate_contract()
         if buffers:
             if "p" in buffers:
                 self.p = float(np.asarray(buffers["p"]).item())

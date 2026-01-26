@@ -14,6 +14,7 @@ import contextvars
 import logging
 import inspect
 from typing import Any
+from .util import ensure_forward_output, ensure_context_dict
 
 # *----------------------------------------------------*
 #                        GLOBALS
@@ -501,6 +502,7 @@ class TensorValuedFunction:
             node = TensorValuedFunction(self.forward_fn, self._grad_fn)
             node.inputs = list(inputs)
             output_data = _call_with_optional_context(node.forward_fn, arrays, node.fwd_ctx, kwargs)
+            ensure_forward_output(output_data, fn_name=node.forward_fn.__name__, tensor_type=Tensor)
             node.fwd_ctx.setdefault("out", output_data)
 
             output_tensor = Tensor(
@@ -515,6 +517,7 @@ class TensorValuedFunction:
 
         else:
             output_data = _call_with_optional_context(self.forward_fn, arrays, None, kwargs)
+            ensure_forward_output(output_data, fn_name=self.forward_fn.__name__, tensor_type=Tensor)
             output_tensor = Tensor(
                 data=output_data,
                 requires_grad=False
@@ -584,8 +587,8 @@ def _call_with_optional_context(fn, arrays, ctx, extra_kwargs=None):
 
         # If caller supplied a 'context' dict, merge it into the node ctx
         supplied_ctx = None
-        if extra_kwargs and "context" in extra_kwargs and isinstance(extra_kwargs["context"], dict):
-            supplied_ctx = extra_kwargs["context"]
+        if extra_kwargs and "context" in extra_kwargs:
+            supplied_ctx = ensure_context_dict(extra_kwargs["context"])
             if ctx is None:
                 ctx = {}
             # merge (ctx was supplied by the engine, so it's empty at first)

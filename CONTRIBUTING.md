@@ -81,6 +81,8 @@ Treat these as normative rules for new development unless explicitly amended.
 - Extra kwargs are forwarded only if the target function accepts them; unknown
   kwargs are dropped to avoid `TypeError`. `context` is never overwritten by
   forwarded kwargs.
+- Forward-call errors are not swallowed by the engine; if the forward raises, it
+  propagates as-is (no retry without kwargs).
 - `_shape_safe_grad` is the standard wrapper for gradient functions that need
   unbroadcasting to input shapes.
 
@@ -190,4 +192,3 @@ Treat these as normative rules for new development unless explicitly amended.
   - `named_buffers()` returns a dict with string keys and values that are
     `Tensor`, `np.ndarray`, or JSON-literals.
 - `BaseModel.state()` calls `layer._validate_contract()` before serializing.
-

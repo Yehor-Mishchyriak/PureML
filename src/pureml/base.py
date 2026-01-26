@@ -57,6 +57,7 @@ class BaseModel:
 
         layers: dict[str, dict[str, Any]] = {}
         for lname, layer in ((name, obj) for name, obj in self.__dict__.items() if isinstance(obj, Layer)):
+            layer._validate_contract()
             tensor_arrays = tuple(t.data for t in layer.parameters)
             buffer_arrays: dict[str, Any] = {}
             for bname, buf in layer.named_buffers().items():

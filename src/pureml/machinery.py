@@ -583,43 +583,44 @@ def _call_with_optional_context(fn, arrays, ctx, extra_kwargs=None):
     """Invoke `fn(*arrays)`, optionally passing `context=ctx` and accepted kwargs."""
     try:
         sig = inspect.signature(fn)
-        params = sig.parameters
-        accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-
-        kw = {}
-
-        # If caller supplied a 'context' dict, merge it into the node ctx
-        supplied_ctx = None
-        if extra_kwargs and "context" in extra_kwargs:
-            supplied_ctx = ensure_context_dict(extra_kwargs["context"])
-            if ctx is None:
-                ctx = {}
-            # merge (ctx was supplied by the engine, so it's empty at first)
-            for k, v in supplied_ctx.items():
-                if k not in ctx:
-                    ctx[k] = v
-
-        # Always pass the node context if the fn accepts it (or **kwargs)
-        if "context" in params or accepts_var_kw:
-            kw["context"] = ctx
-
-        # Forward any other accepted kwargs, but NEVER override 'context'
-        if extra_kwargs:
-            if accepts_var_kw:
-                # copy but drop 'context' to avoid clobbering cuz we already merged the node ctx and the supplied one
-                for k, v in extra_kwargs.items():
-                    if k != "context":
-                        kw[k] = v
-            else:
-                for k, v in extra_kwargs.items():
-                    if k == "context":
-                        continue
-                    if k in params:
-                        kw[k] = v
-
-        return fn(*arrays, **kw) if kw else fn(*arrays)
     except (ValueError, TypeError):
         return fn(*arrays)
+
+    params = sig.parameters
+    accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    kw = {}
+
+    # If caller supplied a 'context' dict, merge it into the node ctx
+    supplied_ctx = None
+    if extra_kwargs and "context" in extra_kwargs:
+        supplied_ctx = ensure_context_dict(extra_kwargs["context"])
+        if ctx is None:
+            ctx = {}
+        # merge (ctx was supplied by the engine, so it's empty at first)
+        for k, v in supplied_ctx.items():
+            if k not in ctx:
+                ctx[k] = v
+
+    # Always pass the node context if the fn accepts it (or **kwargs)
+    if "context" in params or accepts_var_kw:
+        kw["context"] = ctx
+
+    # Forward any other accepted kwargs, but NEVER override 'context'
+    if extra_kwargs:
+        if accepts_var_kw:
+            # copy but drop 'context' to avoid clobbering cuz we already merged the node ctx and the supplied one
+            for k, v in extra_kwargs.items():
+                if k != "context":
+                    kw[k] = v
+        else:
+            for k, v in extra_kwargs.items():
+                if k == "context":
+                    continue
+                if k in params:
+                    kw[k] = v
+
+    return fn(*arrays, **kw) if kw else fn(*arrays)
 
 def is_grad_enabled() -> bool:
     """Return whether gradient recording is currently enabled.

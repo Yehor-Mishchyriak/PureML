@@ -380,7 +380,16 @@ class Tensor:
     def __matmul__(self, other: Tensor)   -> Tensor:
         return TensorValuedFunction(_matmul, _matmul_grad)(self, other)
     
+    def dot(self, other: Tensor)          -> Tensor:
+        return TensorValuedFunction(_dot, _dot_grad)(self, other)
+    
     # RESHAPING
+    def squeeze(self, dim: int | tuple[int, ...] = None) -> Tensor:
+        return TensorValuedFunction(_squeeze, _squeeze_grad)(self, dim=dim)
+
+    def unsqueeze(self, dim: int = None) -> Tensor:
+        return TensorValuedFunction(_unsqueeze, _unsqueeze_grad)(self, dim=dim)
+
     def reshape(self, *shape: int) -> Tensor:
         return reshape(self, *shape)
 
@@ -877,6 +886,24 @@ def _matmul_grad(up: np.ndarray, A: np.ndarray, B: np.ndarray, *, context: dict 
     dA = up @ np.swapaxes(B, -1, -2)            # (..., i, k)
     dB = np.swapaxes(A, -1, -2) @ up            # (..., k, j)
     return dA, dB
+
+def _dot(X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    raise NotImplementedError("The function has not been implemented")
+
+def _dot_grad(upstream: np.ndarray, X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+    raise NotImplementedError("The function has not been implemented")
+
+def _squeeze(X: np.ndarray, dim: int | tuple[int, ...], *, context: dict | None = None) -> np.ndarray:
+    raise NotImplementedError("The function has not been implemented")
+
+def _squeeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    raise NotImplementedError("The function has not been implemented")
+
+def _unsqueeze(X: np.ndarray, dim: int, *, context: dict | None = None) -> np.ndarray:
+    raise NotImplementedError("The function has not been implemented")
+
+def _unsqueeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    raise NotImplementedError("The function has not been implemented")
 
 def _reshape_fwd(new_shape: tuple[int, ...]):
     def _reshape(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:

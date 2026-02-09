@@ -41,7 +41,9 @@ _logger = logging.getLogger(__name__)
 #               CLASSES & HELPER FUNCTIONS
 # *----------------------------------------------------*
 
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- WEIGHT INITIALIZATION STRATEGIES -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# *----------------------------------------------------*
+#                WEIGHT INITIALIZATIONS
+# *----------------------------------------------------*
 
 def xavier_glorot_normal(
     fan_in: int,
@@ -70,7 +72,15 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+def kaiming(
+    fan_in: int,
+    fan_out: int,
+    *,
+    rng: np.random.Generator | None = None
+) -> tuple[Tensor, Tensor]:
+    pass
+
+# *----------------------------------------------------*
 
 class Layer(ABC):
     """A module with (optional) trainable parameters and (optional) non-trainable buffers."""

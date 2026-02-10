@@ -1350,6 +1350,30 @@ def unfold2d(X: Tensor,
         padding: tuple[int, int],
         dilation: tuple[int, int],
         pad_with: float = 0.0):
+    """Extract sliding 2D patches from a tensor (im2col-style).
+
+    For an input ``X`` with shape ``(B, C, H, W)``, this returns a tensor of
+    shape ``(B, C*kH*kW, H_out*W_out)``, where:
+
+    - ``H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1``
+    - ``W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1``
+
+    Args:
+        X: Input tensor of shape ``(B, C, H, W)``.
+        kernel_size: Kernel size ``(kH, kW)``.
+        stride: Sliding stride ``(sH, sW)``.
+        padding: Symmetric padding ``(pH, pW)`` on spatial dimensions.
+        dilation: Dilation ``(dH, dW)`` for kernel taps.
+        pad_with: Constant used to fill padded regions.
+
+    Returns:
+        Tensor: Tensor of shape ``(B, C*kH*kW, H_out*W_out)`` containing
+        flattened receptive fields.
+
+    Notes:
+        The output layout is convenient for convolution-by-matmul workflows:
+        each column is one receptive field, each row is one ``(channel, tap)`` pair.
+    """
     return TensorValuedFunction(
             _unfold2d,
             _unfold2d_grad)(
@@ -1366,6 +1390,29 @@ def unfold1d(X: Tensor,
         padding: int,
         dilation: int,
         pad_with: float = 0.0):
+    """Extract sliding 1D patches from a tensor.
+
+    For an input ``X`` with shape ``(B, C, L)``, this returns a tensor of
+    shape ``(B, C*kL, L_out)``, where:
+
+    - ``L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1``
+
+    Args:
+        X: Input tensor of shape ``(B, C, L)``.
+        kernel_size: Kernel length ``kL``.
+        stride: Sliding stride ``sL``.
+        padding: Symmetric padding ``pL`` on the length axis.
+        dilation: Dilation ``dL`` for kernel taps.
+        pad_with: Constant used to fill padded regions.
+
+    Returns:
+        Tensor: Tensor of shape ``(B, C*kL, L_out)`` containing flattened
+        receptive fields along the length axis.
+
+    Notes:
+        The output layout mirrors ``unfold2d``: rows encode ``(channel, tap)``,
+        and columns encode output positions.
+    """
     return TensorValuedFunction(
             _unfold1d,
             _unfold1d_grad)(

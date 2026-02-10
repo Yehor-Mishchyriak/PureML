@@ -1030,6 +1030,23 @@ def _unfold2d(
 
     return cols
 
+# -=-=-=-=-=-=-=- EXTRA np.add.at INFORMATION -=-=-=-=-=-=-=-
+# g = np.zeros((3, 3), dtype=int)
+#
+# h_idx = np.array([[0, 0, 1],
+#                   [0, 1, 1]])
+# w_idx = np.array([[0, 1, 0],
+#                   [0, 0, 1]])
+#
+# up = np.array([[1, 2, 3],
+#                [4, 5, 6]])
+#
+# np.add.at(g, (h_idx, w_idx), up)
+#    ^^^
+# This means: for every position (i, j) in up,
+# do g[h_idx[i,j], w_idx[i,j]] += up[i,j]
+# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
+
 @_shape_safe_grad
 def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
     if X.ndim != 4:
@@ -1075,23 +1092,6 @@ def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
     gX = gpad[:, :, pH:pH+H, pW:pW+W]
 
     return (gX,)
-
-# -=-=-=-=-=-=-=- EXTRA np.add.at INFORMATION -=-=-=-=-=-=-=-
-# g = np.zeros((3, 3), dtype=int)
-#
-# h_idx = np.array([[0, 0, 1],
-#                   [0, 1, 1]])
-# w_idx = np.array([[0, 1, 0],
-#                   [0, 0, 1]])
-#
-# up = np.array([[1, 2, 3],
-#                [4, 5, 6]])
-#
-# np.add.at(g, (h_idx, w_idx), up)
-#    ^^^
-# This means: for every position (i, j) in up,
-# do g[h_idx[i,j], w_idx[i,j]] += up[i,j]
-# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
 
 # =-=-=-=-=-=-=- EXTRA INFORMATION ON UNFOLD2D -=-=-=-=-=-=-=
 # (Input image) X = 

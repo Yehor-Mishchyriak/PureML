@@ -4,7 +4,7 @@ import numpy as np
 
 # Public API
 from pureml.machinery import Tensor
-from pureml.layers import Affine, Dropout, BatchNorm1d, Embedding
+from pureml.layers import Affine, Dropout, BatchNorm1d, Embedding, unfold1d, unfold2d
 from pureml.general_math import mean
 
 def _rng(seed=0):
@@ -19,6 +19,116 @@ def _decode_method_buf(buf):
     if isinstance(v, (bytes, bytearray)):
         v = v.decode("utf-8", "ignore")
     return str(v)
+
+def _manual_unfold1d(
+        X: np.ndarray,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0) -> np.ndarray:
+    B, C, L = X.shape
+    kL = int(kernel_size)
+    sL = int(stride)
+    pL = int(padding)
+    dL = int(dilation)
+
+    X_pad = np.pad(X, ((0, 0), (0, 0), (pL, pL)), mode="constant", constant_values=pad_with)
+    L_out = int(np.floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1)
+    cols = np.zeros((B, C * kL, L_out), dtype=X.dtype)
+
+    for b in range(B):
+        for c in range(C):
+            for t in range(kL):
+                r = c * kL + t
+                for p in range(L_out):
+                    l_idx = p * sL + t * dL
+                    cols[b, r, p] = X_pad[b, c, l_idx]
+    return cols
+
+def _manual_unfold2d(
+        X: np.ndarray,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0) -> np.ndarray:
+    B, C, H, W = X.shape
+    kH, kW = kernel_size
+    sH, sW = stride
+    pH, pW = padding
+    dH, dW = dilation
+
+    X_pad = np.pad(X, ((0, 0), (0, 0), (pH, pH), (pW, pW)), mode="constant", constant_values=pad_with)
+    H_out = int(np.floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1)
+    W_out = int(np.floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1)
+    cols = np.zeros((B, C * kH * kW, H_out * W_out), dtype=X.dtype)
+
+    for b in range(B):
+        for c in range(C):
+            for kh in range(kH):
+                for kw in range(kW):
+                    r = c * (kH * kW) + kh * kW + kw
+                    for oh in range(H_out):
+                        for ow in range(W_out):
+                            p = oh * W_out + ow
+                            h_idx = oh * sH + kh * dH
+                            w_idx = ow * sW + kw * dW
+                            cols[b, r, p] = X_pad[b, c, h_idx, w_idx]
+    return cols
+
+def _manual_fold1d_grad(
+        upstream_grad: np.ndarray,
+        in_shape: tuple[int, int, int],
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int) -> np.ndarray:
+    B, C, L = in_shape
+    kL = int(kernel_size)
+    sL = int(stride)
+    pL = int(padding)
+    dL = int(dilation)
+
+    L_out = int(np.floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1)
+    gpad = np.zeros((B, C, L + 2*pL), dtype=upstream_grad.dtype)
+    for b in range(B):
+        for c in range(C):
+            for t in range(kL):
+                r = c * kL + t
+                for p in range(L_out):
+                    l_idx = p * sL + t * dL
+                    gpad[b, c, l_idx] += upstream_grad[b, r, p]
+    return gpad[:, :, pL:pL+L]
+
+def _manual_fold2d_grad(
+        upstream_grad: np.ndarray,
+        in_shape: tuple[int, int, int, int],
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int]) -> np.ndarray:
+    B, C, H, W = in_shape
+    kH, kW = kernel_size
+    sH, sW = stride
+    pH, pW = padding
+    dH, dW = dilation
+
+    H_out = int(np.floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1)
+    W_out = int(np.floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1)
+    gpad = np.zeros((B, C, H + 2*pH, W + 2*pW), dtype=upstream_grad.dtype)
+    for b in range(B):
+        for c in range(C):
+            for kh in range(kH):
+                for kw in range(kW):
+                    r = c * (kH * kW) + kh * kW + kw
+                    for oh in range(H_out):
+                        for ow in range(W_out):
+                            p = oh * W_out + ow
+                            h_idx = oh * sH + kh * dH
+                            w_idx = ow * sW + kw * dW
+                            gpad[b, c, h_idx, w_idx] += upstream_grad[b, r, p]
+    return gpad[:, :, pH:pH+H, pW:pW+W]
 
 
 # --------------------------- Affine ---------------------------
@@ -459,6 +569,105 @@ class TestEmbedding(ut.TestCase):
             emb.apply_state(tunable=(np.zeros((D, V)),))  # wrong shape
         with self.assertRaises(ValueError):
             emb.apply_state(tunable=(np.zeros((V, D)), np.zeros((V, D))))  # too many arrays
+
+class TestUnfold(ut.TestCase):
+    def test_unfold1d_forward_matches_manual_reference(self):
+        rng = _rng(101)
+        X_np = rng.standard_normal((2, 3, 9))
+        kL, sL, pL, dL = 3, 2, 1, 1
+
+        Y = unfold1d(Tensor(X_np), kL, sL, pL, dL, pad_with=0.0)
+        expected = _manual_unfold1d(X_np, kL, sL, pL, dL, pad_with=0.0)
+        np.testing.assert_allclose(Y.data, expected, rtol=1e-6, atol=1e-8)
+        self.assertEqual(Y.data.shape, expected.shape)
+
+    def test_unfold1d_forward_respects_padding_and_dilation(self):
+        X_np = np.array([[[1., 2., 3., 4., 5.]]], dtype=np.float64)  # (1,1,5)
+        Y = unfold1d(Tensor(X_np), kernel_size=3, stride=1, padding=2, dilation=2, pad_with=-1.0)
+        expected = _manual_unfold1d(X_np, kernel_size=3, stride=1, padding=2, dilation=2, pad_with=-1.0)
+        np.testing.assert_allclose(Y.data, expected, rtol=0, atol=0)
+
+    def test_unfold1d_backward_matches_manual_scatter_add(self):
+        rng = _rng(102)
+        X = Tensor(rng.standard_normal((2, 2, 8)), requires_grad=True)
+        kL, sL, pL, dL = 4, 2, 1, 1
+        Y = unfold1d(X, kL, sL, pL, dL, pad_with=0.0)
+        upstream = rng.standard_normal(Y.data.shape)
+        Y.backward(upstream)
+
+        expected_dX = _manual_fold1d_grad(upstream, X.data.shape, kL, sL, pL, dL)
+        np.testing.assert_allclose(X.grad, expected_dX, rtol=1e-6, atol=1e-8)
+
+    def test_unfold1d_backward_overlap_accumulation_pattern(self):
+        X = Tensor(np.zeros((1, 1, 5), dtype=np.float64), requires_grad=True)
+        Y = unfold1d(X, kernel_size=3, stride=1, padding=0, dilation=1, pad_with=0.0)
+        Y.backward(np.ones_like(Y.data))
+        expected = np.array([[[1., 2., 3., 2., 1.]]], dtype=np.float64)
+        np.testing.assert_allclose(X.grad, expected, rtol=0, atol=0)
+
+    def test_unfold2d_forward_matches_manual_reference(self):
+        rng = _rng(103)
+        X_np = rng.standard_normal((2, 2, 5, 6))
+        k = (2, 3)
+        s = (1, 2)
+        p = (1, 0)
+        d = (1, 1)
+        Y = unfold2d(Tensor(X_np), k, s, p, d, pad_with=0.0)
+        expected = _manual_unfold2d(X_np, k, s, p, d, pad_with=0.0)
+        np.testing.assert_allclose(Y.data, expected, rtol=1e-6, atol=1e-8)
+        self.assertEqual(Y.data.shape, expected.shape)
+
+    def test_unfold2d_forward_respects_padding_and_dilation(self):
+        X_np = np.arange(1, 10, dtype=np.float64).reshape(1, 1, 3, 3)
+        Y = unfold2d(Tensor(X_np), kernel_size=(2, 2), stride=(1, 1), padding=(2, 1), dilation=(2, 1), pad_with=-5.0)
+        expected = _manual_unfold2d(X_np, kernel_size=(2, 2), stride=(1, 1), padding=(2, 1), dilation=(2, 1), pad_with=-5.0)
+        np.testing.assert_allclose(Y.data, expected, rtol=0, atol=0)
+
+    def test_unfold2d_backward_matches_manual_scatter_add(self):
+        rng = _rng(104)
+        X = Tensor(rng.standard_normal((2, 3, 6, 5)), requires_grad=True)
+        k = (3, 2)
+        s = (2, 1)
+        p = (1, 1)
+        d = (1, 1)
+        Y = unfold2d(X, k, s, p, d, pad_with=0.0)
+        upstream = rng.standard_normal(Y.data.shape)
+        Y.backward(upstream)
+
+        expected_dX = _manual_fold2d_grad(upstream, X.data.shape, k, s, p, d)
+        np.testing.assert_allclose(X.grad, expected_dX, rtol=1e-6, atol=1e-8)
+
+    def test_unfold2d_backward_overlap_accumulation_pattern(self):
+        X = Tensor(np.zeros((1, 1, 4, 4), dtype=np.float64), requires_grad=True)
+        Y = unfold2d(X, kernel_size=(2, 2), stride=(1, 1), padding=(0, 0), dilation=(1, 1), pad_with=0.0)
+        Y.backward(np.ones_like(Y.data))
+        expected = np.array(
+            [[[[1., 2., 2., 1.],
+               [2., 4., 4., 2.],
+               [2., 4., 4., 2.],
+               [1., 2., 2., 1.]]]],
+            dtype=np.float64
+        )
+        np.testing.assert_allclose(X.grad, expected, rtol=0, atol=0)
+
+    def test_unfold_validation_errors(self):
+        with self.assertRaises(ValueError):
+            _ = unfold1d(Tensor(np.zeros((2, 3, 4, 5))), 3, 1, 0, 1)  # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = unfold1d(Tensor(np.zeros((1, 1, 5))), 0, 1, 0, 1)      # bad kernel
+        with self.assertRaises(ValueError):
+            _ = unfold1d(Tensor(np.zeros((1, 1, 5))), 3, 1, -1, 1)     # bad padding
+        with self.assertRaises(ValueError):
+            _ = unfold1d(Tensor(np.zeros((1, 1, 2))), 5, 1, 0, 1)      # invalid output size
+
+        with self.assertRaises(ValueError):
+            _ = unfold2d(Tensor(np.zeros((1, 1, 5))), (3, 3), (1, 1), (0, 0), (1, 1))  # ndim mismatch
+        with self.assertRaises(TypeError):
+            _ = unfold2d(Tensor(np.zeros((1, 1, 5, 5))), 3, (1, 1), (0, 0), (1, 1))     # tuple check
+        with self.assertRaises(ValueError):
+            _ = unfold2d(Tensor(np.zeros((1, 1, 4, 4))), (0, 3), (1, 1), (0, 0), (1, 1)) # bad kernel
+        with self.assertRaises(ValueError):
+            _ = unfold2d(Tensor(np.zeros((1, 1, 2, 2))), (5, 5), (1, 1), (0, 0), (1, 1)) # invalid output size
 
 
 if __name__ == "__main__":

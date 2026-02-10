@@ -1189,7 +1189,7 @@ def _unfold1d(
     if padding < 0:
         raise ValueError(f"padding must be >= 0, got {padding}")
 
-    _, C, L = X.shape
+    B, C, L = X.shape
     kL = kernel_size
     sL = stride
     dL = dilation

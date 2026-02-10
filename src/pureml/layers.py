@@ -964,6 +964,24 @@ def _unfold2d(
         pad_with: float,
         *,
         context: dict | None = None) -> np.ndarray:
+    """Unfold a 4D tensor into sliding local blocks (im2col layout).
+
+    Args:
+        X: Input array of shape ``(B, C, H, W)``.
+        kernel_size: ``(kH, kW)`` kernel size.
+        stride: ``(sH, sW)`` step of the sliding window.
+        padding: ``(pH, pW)`` zero-padding on both spatial sides.
+        dilation: ``(dH, dW)`` spacing between kernel taps.
+        pad_with: Constant value used for padding.
+        context: Optional cache used by ``_unfold2d_grad``.
+
+    Returns:
+        np.ndarray: Unfolded columns with shape ``(B, C*kH*kW, H_out*W_out)``.
+    """
+    _logger.debug(
+        "_unfold2d forward: X.shape=%s, kernel_size=%s, stride=%s, padding=%s, dilation=%s, pad_with=%s",
+        getattr(X, "shape", None), kernel_size, stride, padding, dilation, pad_with
+    )
     if X.ndim != 4:
         raise ValueError(f"_unfold2d expects X with shape (B, C, H, W), got {X.shape}")
     for name, v in (("kernel_size", kernel_size), ("stride", stride), ("padding", padding), ("dilation", dilation)):
@@ -989,6 +1007,7 @@ def _unfold2d(
 
     H_out = _L_out(H, pH, dH, kH, sH) # H length
     W_out = _L_out(W, pW, dW, kW, sW) # W length
+    _logger.debug("_unfold2d forward: padded_shape=%s, H_out=%d, W_out=%d", X_pad.shape, H_out, W_out)
     if H_out <= 0 or W_out <= 0:
         raise ValueError(
             "Invalid unfold2d output size. "
@@ -1031,6 +1050,7 @@ def _unfold2d(
         pH=pH, pW=pW, in_shape=X.shape, out=None, overwrite=False
     )
 
+    _logger.debug("_unfold2d forward: cols.shape=%s", cols.shape)
     return cols
 
 # -=-=-=-=-=-=-=- EXTRA np.add.at INFORMATION -=-=-=-=-=-=-=-
@@ -1052,6 +1072,20 @@ def _unfold2d(
 
 @_shape_safe_grad
 def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    """Backward pass for ``_unfold2d`` via scatter-add into padded input space.
+
+    Args:
+        upstream_grad: Gradient w.r.t unfolded output with shape ``(B, R, P)``.
+        X: Original forward input of shape ``(B, C, H, W)``.
+        context: Forward cache containing ``c_idx/h_idx/w_idx`` and ``pH/pW``.
+
+    Returns:
+        tuple[np.ndarray]: A single-element tuple containing ``dL/dX``.
+    """
+    _logger.debug(
+        "_unfold2d_grad backward: upstream_grad.shape=%s, X.shape=%s",
+        getattr(upstream_grad, "shape", None), getattr(X, "shape", None)
+    )
     if X.ndim != 4:
         raise ValueError(f"_unfold2d_grad expects X with shape (B, C, H, W), got {X.shape}")
     ctx = context or {}
@@ -1068,6 +1102,10 @@ def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
 
     B, C, H, W = X.shape
     R, P = h_idx.shape
+    _logger.debug(
+        "_unfold2d_grad backward: c_idx.shape=%s, h_idx.shape=%s, w_idx.shape=%s, pH=%d, pW=%d",
+        getattr(c_idx, "shape", None), getattr(h_idx, "shape", None), getattr(w_idx, "shape", None), pH, pW
+    )
     if upstream_grad.shape != (B, R, P):
         raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
     gpad = np.zeros((B, C, H + 2*pH, W + 2*pW), dtype=upstream_grad.dtype) # gpad must be the same shape as X_pad
@@ -1094,6 +1132,7 @@ def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
     # crop padding back to input shape
     gX = gpad[:, :, pH:pH+H, pW:pW+W]
 
+    _logger.debug("_unfold2d_grad backward: gX.shape=%s", gX.shape)
     return (gX,)
 
 # =-=-=-=-=-=-=- EXTRA INFORMATION ON UNFOLD2D -=-=-=-=-=-=-=
@@ -1181,6 +1220,24 @@ def _unfold1d(
         pad_with: float,
         *,
         context: dict | None = None) -> np.ndarray:
+    """Unfold a 3D tensor into 1D sliding windows.
+
+    Args:
+        X: Input array of shape ``(B, C, L)``.
+        kernel_size: Kernel length ``kL``.
+        stride: Sliding stride ``sL``.
+        padding: Symmetric padding ``pL``.
+        dilation: Kernel dilation ``dL``.
+        pad_with: Constant value used for padding.
+        context: Optional cache used by ``_unfold1d_grad``.
+
+    Returns:
+        np.ndarray: Unfolded columns with shape ``(B, C*kL, L_out)``.
+    """
+    _logger.debug(
+        "_unfold1d forward: X.shape=%s, kernel_size=%s, stride=%s, padding=%s, dilation=%s, pad_with=%s",
+        getattr(X, "shape", None), kernel_size, stride, padding, dilation, pad_with
+    )
     if X.ndim != 3:
         raise ValueError(f"_unfold1d expects X with shape (B, C, L), got {X.shape}")
     if kernel_size <= 0:
@@ -1206,6 +1263,7 @@ def _unfold1d(
     )
 
     L_out = _L_out(L, pL, dL, kL, sL)
+    _logger.debug("_unfold1d forward: padded_shape=%s, L_out=%d", X_pad.shape, L_out)
     if L_out <= 0:
         raise ValueError(
             "Invalid unfold1d output size. "
@@ -1235,10 +1293,25 @@ def _unfold1d(
         overwrite=False
     )
 
+    _logger.debug("_unfold1d forward: cols.shape=%s", cols.shape)
     return cols
 
 @_shape_safe_grad
 def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    """Backward pass for ``_unfold1d`` via scatter-add into padded length axis.
+
+    Args:
+        upstream_grad: Gradient w.r.t unfolded output with shape ``(B, R, P)``.
+        X: Original forward input of shape ``(B, C, L)``.
+        context: Forward cache containing ``c_idx/l_idx`` and ``pL``.
+
+    Returns:
+        tuple[np.ndarray]: A single-element tuple containing ``dL/dX``.
+    """
+    _logger.debug(
+        "_unfold1d_grad backward: upstream_grad.shape=%s, X.shape=%s",
+        getattr(upstream_grad, "shape", None), getattr(X, "shape", None)
+    )
     if X.ndim != 3:
         raise ValueError(f"_unfold1d_grad expects X with shape (B, C, L), got {X.shape}")
     ctx = context or {}
@@ -1252,6 +1325,10 @@ def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
 
     B, C, L = X.shape
     R, P = l_idx.shape
+    _logger.debug(
+        "_unfold1d_grad backward: c_idx.shape=%s, l_idx.shape=%s, pL=%d",
+        getattr(c_idx, "shape", None), getattr(l_idx, "shape", None), pL
+    )
     if upstream_grad.shape != (B, R, P):
         raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
     gpad = np.zeros((B, C, L + 2*pL), dtype=upstream_grad.dtype)
@@ -1260,6 +1337,7 @@ def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
 
     gX = gpad[:, :, pL:pL+L]
 
+    _logger.debug("_unfold1d_grad backward: gX.shape=%s", gX.shape)
     return (gX,)
 
 # *----------------------------------------------------*

@@ -943,6 +943,431 @@ class Embedding(Layer):
         
         return out
 
+# *----------------------------------------------------*
+#          CNN HELPER FUNCTIONS (PRIVATE SCOPE)
+# *----------------------------------------------------*
+
+def _L_out(L_in: int, p: int, d: int, kL: int, s: int) -> int:
+    return floor((L_in + 2*p - d*(kL - 1) - 1) / s) + 1
+
+# *----------------------------------------------------*
+
+def _unfold2d(
+        X: np.ndarray, # (B, C, H, W)
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float,
+        *,
+        context: dict | None = None) -> np.ndarray:
+    if X.ndim != 4:
+        raise ValueError(f"_unfold2d expects X with shape (B, C, H, W), got {X.shape}")
+    for name, v in (("kernel_size", kernel_size), ("stride", stride), ("padding", padding), ("dilation", dilation)):
+        if not (isinstance(v, tuple) and len(v) == 2):
+            raise TypeError(f"{name} must be a tuple[int, int], got {v!r}")
+
+    B, C, H, W = X.shape # B - batch size, C - input channels, H, W - input spatial size
+    kH, kW = kernel_size # kH, kW - kernel spatial size
+    sH, sW = stride      # sH, sW - stride size along the H and W axes
+    dH, dW = dilation    # dH, dW - kernel dilation along the H and W axes
+    pH, pW = padding     # pH, pW - padding at the ends of the H and W axes
+    if kH <= 0 or kW <= 0:
+        raise ValueError(f"kernel_size entries must be > 0, got {kernel_size}")
+    if sH <= 0 or sW <= 0:
+        raise ValueError(f"stride entries must be > 0, got {stride}")
+    if dH <= 0 or dW <= 0:
+        raise ValueError(f"dilation entries must be > 0, got {dilation}")
+    if pH < 0 or pW < 0:
+        raise ValueError(f"padding entries must be >= 0, got {padding}")
+
+    X_pad = np.pad(X, pad_width=((0, 0), (0, 0), (pH, pH), (pW, pW)), mode="constant", constant_values=pad_with)
+    # ^^^ shaped: (B, C, pH+H+pH, pW+W+pW)
+
+    H_out = _L_out(H, pH, dH, kH, sH) # H length
+    W_out = _L_out(W, pW, dW, kW, sW) # W length
+    if H_out <= 0 or W_out <= 0:
+        raise ValueError(
+            "Invalid unfold2d output size. "
+            f"Got H_out={H_out}, W_out={W_out} from input={(H, W)}, "
+            f"kernel={(kH, kW)}, stride={(sH, sW)}, padding={(pH, pW)}, dilation={(dH, dW)}"
+        )
+
+    # auxiliary constants:
+    K = kH * kW # - kernel elements per channel
+    P = H_out * W_out # - number of sliding positions
+
+    H_start = np.arange(H_out) * sH # top-left y positions per output row
+    W_start = np.arange(W_out) * sW # top-left x positions per output col
+    H_taps  = np.arange(kH) * dH    # y offsets inside kernel with dilation
+    W_taps  = np.arange(kW) * dW    # x offsets inside kernel with dilation
+
+    H_centers, W_centers = np.meshgrid(H_start, W_start, indexing="ij")   # kernel centers (H_out, W_out), (H_out, W_out)
+    # ^^^ all output center/start coordinates flattened later to P
+    H_koords, W_koords   = np.meshgrid(H_taps, W_taps, indexing="ij")     # kernel taps around each center
+    # ^^^ all kernel offsets flattened later to K
+    H_centers = H_centers.reshape(-1); W_centers = W_centers.reshape(-1)  # flat kernel centers ([P,], [P,])
+    H_koords  = H_koords.reshape(-1);  W_koords  = W_koords.reshape(-1)   # flat kernel taps    ([K,], [K,])
+    # Now expand across the C channels:
+    #                 (K, 1) +          (1, P) = (K, P)
+    finalH = H_koords[..., None] + H_centers[None, ...]
+    finalW = W_koords[..., None] + W_centers[None, ...]
+    # ^^^ for each kernel element and each output position, compute absolute y/x in padded image
+
+    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1) -- because from each channel C, we need to extract an entry K
+    h_idx = np.tile(finalH, (C, 1))              # (C*K, P) -- we do it for each output location so there is P
+    w_idx = np.tile(finalW, (C, 1))              # (C*K, P) -- and this is within both H and W axes
+
+    # !NOTE: here's what h_idx and w_idx are: “Which pixel in the padded image did this column entry (in `col`) come from?”
+
+    # interpret the (C*K, P) shape as "K kernel taps per C channels for each output location"
+    cols = X_pad[:, c_idx, h_idx, w_idx]         # (B, C*K, P)
+
+    _update_ctx(context,
+        c_idx=lambda: c_idx, h_idx=lambda: h_idx, w_idx=lambda: w_idx, # note lazy caching
+        pH=pH, pW=pW, in_shape=X.shape, out=None, overwrite=False
+    )
+
+    return cols
+
+@_shape_safe_grad
+def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    if X.ndim != 4:
+        raise ValueError(f"_unfold2d_grad expects X with shape (B, C, H, W), got {X.shape}")
+    ctx = context or {}
+    if any(k not in ctx for k in ("c_idx", "h_idx", "w_idx", "pH", "pW")):
+        raise RuntimeError("_unfold2d_grad requires c_idx/h_idx/w_idx/pH/pW in context")
+    c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx          # (C*K, 1) (note the call operator due to lazy caching)
+    h_idx = ctx["h_idx"]; h_idx = h_idx() if callable(h_idx) else h_idx          # (C*K, P)
+    w_idx = ctx["w_idx"]; w_idx = w_idx() if callable(w_idx) else w_idx          # (C*K, P)
+    pH, pW = int(ctx["pH"]), int(ctx["pW"])
+    if c_idx.ndim == 1:
+        c_idx = c_idx[:, None]
+    if h_idx.shape != w_idx.shape:
+        raise ValueError(f"h_idx and w_idx must have same shape, got {h_idx.shape} vs {w_idx.shape}")
+
+    B, C, H, W = X.shape
+    R, P = h_idx.shape
+    if upstream_grad.shape != (B, R, P):
+        raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
+    gpad = np.zeros((B, C, H + 2*pH, W + 2*pW), dtype=upstream_grad.dtype) # gpad must be the same shape as X_pad
+
+    # scatter-add (inverse of gather)
+    np.add.at(gpad, (slice(None), c_idx, h_idx, w_idx), upstream_grad)
+
+    # !NOTE: very importantly upstream_grad is shaped as [B, R, P] -- it's a batch of matrices.
+    # Each column P is a receptive field's output. For a fixed batch b and position p, upstream_grad[b, :, p]
+    # is a vector of length R -- gradient for every pixel that participated in that receptive field.
+    # Each row = same kernel tap across all positions. For fixed r: upstream_grad[b, r, :]
+    # is gradient for that specific kernel tap across all sliding windows.
+
+    # Logic:
+    # What np.add.at is doing:
+    # FWD:
+    # cols[b, r, p] = X_pad[b, c_idx[r], h_idx[r, p], w_idx[r, p]]
+    # BWD:
+    # gpad[b, c_idx[r], h_idx[r,p], w_idx[r,p]] += upstream_grad[b, r, p]
+    # ^^^  which is what np.add.at(gpad, (slice(None), c_idx, h_idx, w_idx), upstream_grad) does.
+    # This is necessary because many (r,p) can hit the same source pixel (overlap),
+    # so gradients must be summed. add.at guarantees accumulation for repeated indices.
+
+    # crop padding back to input shape
+    gX = gpad[:, :, pH:pH+H, pW:pW+W]
+
+    return (gX,)
+
+# -=-=-=-=-=-=-=- EXTRA np.add.at INFORMATION -=-=-=-=-=-=-=-
+# g = np.zeros((3, 3), dtype=int)
+#
+# h_idx = np.array([[0, 0, 1],
+#                   [0, 1, 1]])
+# w_idx = np.array([[0, 1, 0],
+#                   [0, 0, 1]])
+#
+# up = np.array([[1, 2, 3],
+#                [4, 5, 6]])
+#
+# np.add.at(g, (h_idx, w_idx), up)
+#    ^^^
+# This means: for every position (i, j) in up,
+# do g[h_idx[i,j], w_idx[i,j]] += up[i,j]
+# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
+
+# =-=-=-=-=-=-=- EXTRA INFORMATION ON UNFOLD2D -=-=-=-=-=-=-=
+# (Input image) X = 
+# ┌───┬───┬───┬───┐
+# │ a │ b │ c │ d │
+# ├───┼───┼───┼───┤
+# │ e │ f │ g │ h │
+# ├───┼───┼───┼───┤
+# │ i │ j │ k │ l │
+# ├───┼───┼───┼───┤
+# │ m │ n │ o │ p │
+# └───┴───┴───┴───┘
+# Each 2×2 window becomes one column:
+# p=0        p=1        p=2
+# [a b]      [b c]      [c d]
+# [e f]      [f g]      [g h]
+
+# p=3        p=4        p=5
+# [e f]      [f g]      [g h]
+# [i j]      [j k]      [k l]
+
+# p=6        p=7        p=8
+# [i j]      [j k]      [k l]
+# [m n]      [n o]      [o p]
+# Flatten each window → column vector of length R = kH·kW = 4:
+# cols = (R × P)
+#
+#       p0  p1  p2  p3  p4  p5  p6  p7  p8
+# r0    a   b   c   e   f   g   i   j   k
+# r1    b   c   d   f   g   h   j   k   l
+# r2    e   f   g   i   j   k   m   n   o
+# r3    f   g   h   j   k   l   n   o   p
+# ^ ^ ^ -- Each entry came from one pixel in X.
+#
+# Now add batch + channels:
+# If you have:
+#   •	B images
+#   •	C channels
+# R = C × kH × kW
+# P = H_out × W_out
+# Then, cols.shape = (B, R, P), that is,
+# Batch 0 → (R × P) matrix
+# Batch 1 → (R × P) matrix
+# Batch 2 → (R × P) matrix
+# ...
+#
+# Now imagine gradients coming back from later layers:
+# upstream_grad[b] =
+#        p0    p1    p2    p3    p4    p5    p6    p7    p8
+# r0   g00   g01   g02   g03   g04   g05   g06   g07   g08
+# r1   g10   g11   g12   g13   g14   g15   g16   g17   g18
+# r2   g20   g21   g22   g23   g24   g25   g26   g27   g28
+# r3   g30   g31   g32   g33   g34   g35   g36   g37   g38
+
+# ^ ^ ^ -- Each value must go back to the pixel it originally came from.
+# Example:
+# 	•	g₀₀ came from pixel a
+# 	•	g₁₀ came from pixel b
+# 	•	g₂₀ came from pixel e
+# 	•	g₃₀ came from pixel f
+#
+# But pixel f appears in multiple windows → multiple grads hit it.
+# So backward does:
+# grad[f] += g₃₀ + g₁₁ + g₀₄ + ...
+# Now, each 'f' pixel is identified by h and w _idx, so we do:
+# grad[h_idx[r,p], w_idx[r,p]] += upstream_grad[r, p]
+# 
+# The following also helps understand the idea:
+# upstream_grad is the same shape as cols, obviously
+# So, upstream_grad[r, p] is contributions of each (r, p)th entry of cols.
+# But here's the kicker: h_idx[r,p] gives all the heights where the pixel responsible
+# for the (r, p) grad entry is located in the X_pad image height-wise, while w_idx[r,p] tells us
+# the same but width-wise, so we take all the grad entries (contributions of this pixel) and add
+# them together so that the overall shape matches the shape of the original (folded) image.
+# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
+
+# *----------------------------------------------------*
+def _unfold1d(
+        X: np.ndarray, # (B, C, L)
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float,
+        *,
+        context: dict | None = None) -> np.ndarray:
+    if X.ndim != 3:
+        raise ValueError(f"_unfold1d expects X with shape (B, C, L), got {X.shape}")
+    if kernel_size <= 0:
+        raise ValueError(f"kernel_size must be > 0, got {kernel_size}")
+    if stride <= 0:
+        raise ValueError(f"stride must be > 0, got {stride}")
+    if dilation <= 0:
+        raise ValueError(f"dilation must be > 0, got {dilation}")
+    if padding < 0:
+        raise ValueError(f"padding must be >= 0, got {padding}")
+
+    _, C, L = X.shape
+    kL = kernel_size
+    sL = stride
+    dL = dilation
+    pL = padding
+
+    X_pad = np.pad(
+        X,
+        pad_width=((0, 0), (0, 0), (pL, pL)),
+        mode="constant",
+        constant_values=pad_with
+    )
+
+    L_out = _L_out(L, pL, dL, kL, sL)
+    if L_out <= 0:
+        raise ValueError(
+            "Invalid unfold1d output size. "
+            f"Got L_out={L_out} from input={L}, kernel={kL}, stride={sL}, padding={pL}, dilation={dL}"
+        )
+
+    K = kL
+    P = L_out
+
+    L_start = np.arange(L_out) * sL
+    L_taps = np.arange(kL) * dL
+
+    finalL = L_taps[:, None] + L_start[None, :]  # (K, P)
+
+    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1)
+    l_idx = np.tile(finalL, (C, 1))              # (C*K, P)
+
+    cols = X_pad[:, c_idx, l_idx]                # (B, C*K, P)
+
+    _update_ctx(
+        context,
+        c_idx=lambda: c_idx,
+        l_idx=lambda: l_idx,
+        pL=pL,
+        in_shape=X.shape,
+        out=None,
+        overwrite=False
+    )
+
+    return cols
+
+@_shape_safe_grad
+def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    if X.ndim != 3:
+        raise ValueError(f"_unfold1d_grad expects X with shape (B, C, L), got {X.shape}")
+    ctx = context or {}
+    if any(k not in ctx for k in ("c_idx", "l_idx", "pL")):
+        raise RuntimeError("_unfold1d_grad requires c_idx/l_idx/pL in context")
+    c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx
+    l_idx = ctx["l_idx"]; l_idx = l_idx() if callable(l_idx) else l_idx
+    pL = int(ctx["pL"])
+    if c_idx.ndim == 1:
+        c_idx = c_idx[:, None]
+
+    B, C, L = X.shape
+    R, P = l_idx.shape
+    if upstream_grad.shape != (B, R, P):
+        raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
+    gpad = np.zeros((B, C, L + 2*pL), dtype=upstream_grad.dtype)
+
+    np.add.at(gpad, (slice(None), c_idx, l_idx), upstream_grad)
+
+    gX = gpad[:, :, pL:pL+L]
+
+    return (gX,)
+
+# *----------------------------------------------------*
+#          CNN HELPER FUNCTIONS (PUBLIC SCOPE)
+# *----------------------------------------------------*
+
+def unfold2d(X: Tensor,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0):
+    return TensorValuedFunction(
+            _unfold2d,
+            _unfold2d_grad)(
+                X, 
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                pad_with=pad_with)
+
+def unfold1d(X: Tensor,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0):
+    return TensorValuedFunction(
+            _unfold1d,
+            _unfold1d_grad)(
+                X,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                pad_with=pad_with)
+
+# *----------------------------------------------------*
+#                   CNN CORE LAYERS
+# *----------------------------------------------------*
+
+class Conv2D(Layer):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        use_bias: bool = True,
+        pad_with: float = 0.0,
+        *,
+        method="kaiming",
+        training: bool = True,
+        seed: int | None = None):
+
+        """
+        `kernel_size`, `stride`, `padding`, `dilation` can either be:
+            1) int, in which case the same value is used for the height and width dimension; OR
+            2) tuple[int, int], in which case, the first int is used for the height dimension, and the second int for the width dimension.
+        """
+
+        super().__init__(training=training)
+
+        self.method = method
+        self._rng, self.seed = rng_from_seed(seed)
+        self.use_bias = bool(use_bias)
+
+        try:
+            init_fn = {"kaiming": kaiming}[method]
+        except KeyError as e:
+            raise ValueError(f"Unknown init method '{method}'") from e
+
+        self.kernel_size = self._pair(kernel_size)
+        self.stride = self._pair(stride)
+        self.padding = self._pair(padding)
+        self.dilation = self._pair(dilation)
+        self.pad_with = pad_with
+
+        # trainable parameters
+        self.kernels: list[Tensor] = [init_fn(in_channels, out_channels, kernel_size)] * out_channels
+    
+    @staticmethod
+    def _pair(v: int | tuple[int, int]):
+        if isinstance(v, int):
+            return (v, v)
+        return v
+
+class Conv1D(Layer):
+    pass
+
+class MaxPool2D(Layer):
+    pass
+
+class MeanPool2D(Layer):
+    pass
+
+class AdaPool2D(Layer):
+    pass
+
+class MaxPool1D(Layer):
+    pass
+
+class MeanPool1D(Layer):
+    pass
+
+class AdaPool1D(Layer):
+    pass
+
 
 __all__ = [
     "xavier_glorot_normal",
@@ -950,7 +1375,9 @@ __all__ = [
     "Affine",
     "Dropout",
     "BatchNorm1d",
-    "Embedding"
+    "Embedding",
+    "unfold2d",
+    "unfold1d",
 ]
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from zarr.codecs import BloscCodec, BloscShuffle, BloscCname
 # built-in
 import logging
 from datetime import datetime, date
-from typing import Callable, Iterable, Iterator, Any
+from typing import Callable, Iterable, Iterator, Any, Literal
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +28,8 @@ import random
 
 _logger = logging.getLogger(__name__)
 
+ZarrOpenMode = Literal["r", "r+", "a", "w", "w-", "x"]
+
 # *----------------------------------------------------*
 #                        CLASSES
 # *----------------------------------------------------*
@@ -40,7 +42,7 @@ class ArrayStorage:
     array with shape ``(N, *item_shape)`` where axis 0 is append-only.
     Per-block metadata (chunk length, item shape, dtype) is kept in group attrs.
     """
-    def __init__(self, pth: Path | str, mode: str) -> None:
+    def __init__(self, pth: Path | str, mode: ZarrOpenMode) -> None:
         """Initialize the storage and ensure a root group exists.
 
         Args:

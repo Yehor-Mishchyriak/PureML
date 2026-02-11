@@ -79,7 +79,7 @@ def _euclidean_distance_grad(
                   getattr(upstream_grad, "shape", None),
                   getattr(x, "shape", None), getattr(y, "shape", None))
 
-    ctx = context or {}
+    ctx = context if context is not None else {}
     diff = ctx.get("diff", x - y)
     d = ctx.get("out", np.sqrt(np.sum(diff * diff)))
 
@@ -115,7 +115,7 @@ def _mean(X: np.ndarray, *, context: dict | None = None, axis: int | None = None
 @_shape_safe_grad
 def _mean_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = None) -> tuple[np.ndarray]:
     """VJP for mean over a chosen axis."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     if ax is None:
         N = X.size if X.size else 1
         grad = np.broadcast_to(upstream / N, X.shape)
@@ -149,7 +149,7 @@ def _deviation(X: np.ndarray, *, context: dict | None = None, axis: int = -1) ->
 @_shape_safe_grad
 def _deviation_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for deviation: upstream - mean(upstream, axis)."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     _logger.debug("dev bwd: up.shape=%s, X.shape=%s, axis=%s",
                   getattr(upstream, "shape", None), getattr(X, "shape", None), ax)
     mean_up = np.mean(upstream, axis=ax, keepdims=True)
@@ -175,7 +175,7 @@ def _variance(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> 
 @_shape_safe_grad
 def _variance_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for variance over a chosen axis."""
-    ctx = context or {}
+    ctx = context if context is not None else {}
     ax = ctx.get("axis", axis)
     if ax is None:
         _logger.debug("var bwd: up.shape=%s, X.shape=%s, axis=%s (None->all)",
@@ -213,7 +213,7 @@ def _std(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.nd
 @_shape_safe_grad
 def _std_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for standard deviation over a chosen axis: d std / dX = dev / (N * std)."""
-    ctx = context or {}
+    ctx = context if context is not None else {}
     ax = ctx.get("axis", axis)
     if ax is None:
         _logger.debug("std bwd: up.shape=%s, X.shape=%s, axis=%s (None->all)",
@@ -251,7 +251,7 @@ def _sum(X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -
 @_shape_safe_grad
 def _sum_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for sum: broadcast upstream back over the reduced axis/axes."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     if ax is None:
         up = upstream  # scalar or already broadcastable
     else:

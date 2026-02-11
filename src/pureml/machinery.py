@@ -831,7 +831,7 @@ def _sqrt(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:
 
 @_shape_safe_grad
 def _sqrt_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None = None):
-    s = (context or {}).get("out")
+    s = (context if context is not None else {}).get("out")
     if s is None:
         s = np.sqrt(x)
     return (0.5 * upstream_grad / (s + 1e-12),)
@@ -980,7 +980,7 @@ def _reshape_fwd(new_shape: tuple[int, ...]):
 def _reshape_bwd():
     @_shape_safe_grad
     def _reshape_grad(up: np.ndarray, x: np.ndarray, *, context: dict | None = None):
-        in_shape = (context or {}).get("in_shape", x.shape)
+        in_shape = (context if context is not None else {}).get("in_shape", x.shape)
         return (up.reshape(in_shape),)
     return _reshape_grad
 
@@ -1061,7 +1061,7 @@ def _general_transpose(X: np.ndarray, *, order: tuple[int, ...], context: dict |
 
 @_shape_safe_grad
 def _general_transpose_grad(upstream: np.ndarray, X: np.ndarray, order: tuple[int, ...] | None = None, *, context: dict | None = None):
-    ctx = context or {}
+    ctx = context if context is not None else {}
 
     inv_order = ctx.get("inv_order")
     if inv_order is None:

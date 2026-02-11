@@ -37,7 +37,7 @@ def _sigmoid_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | N
         "sigmoid bwd: up.shape=%s, x.shape=%s",
         getattr(upstream_grad, "shape", None), getattr(x, "shape", None)
     )
-    s = (context or {}).get("out")
+    s = (context if context is not None else {}).get("out")
     if s is None:
         s = 1.0 / (1.0 + np.exp(-x))
     grad = upstream_grad * s * (1.0 - s)
@@ -59,7 +59,7 @@ def _relu_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None
         "relu bwd: up.shape=%s, x.shape=%s",
         getattr(upstream_grad, "shape", None), getattr(x, "shape", None)
     )
-    out = (context or {}).get("out")
+    out = (context if context is not None else {}).get("out")
     if out is not None:
         mask = (out > 0).astype(x.dtype)  # same as (x>0), but reuse cached out
     else:
@@ -85,7 +85,7 @@ def _tanh_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None
         "tanh bwd: up.shape=%s, x.shape=%s",
         getattr(upstream_grad, "shape", None), getattr(x, "shape", None)
     )
-    t = (context or {}).get("out")
+    t = (context if context is not None else {}).get("out")
     if t is None:
         e_x = np.exp(x)
         e_neg_x = np.exp(-x)
@@ -120,7 +120,7 @@ def _softmax_bwd(axis: int):
             "softmax bwd: up.shape=%s, x.shape=%s, axis=%d",
             getattr(upstream_grad, "shape", None), getattr(x, "shape", None), axis
         )
-        s = (context or {}).get("out")
+        s = (context if context is not None else {}).get("out")
         if s is None:
             m = np.max(x, axis=axis, keepdims=True)
             e = np.exp(x - m)
@@ -153,7 +153,7 @@ def _log_softmax_bwd(axis: int):
             getattr(upstream_grad, "shape", None), getattr(x, "shape", None), axis
         )
         # prefer cached log-softmax; derive softmax from it
-        logp = (context or {}).get("out")
+        logp = (context if context is not None else {}).get("out")
         if logp is not None:
             s = np.exp(logp)  # stable: softmax = exp(log_softmax)
         else:

@@ -384,7 +384,7 @@ class Affine(Layer):
             getattr(W, "shape", None), getattr(b, "shape", None)
         )
 
-        ctx = context or {}
+        ctx = context if context is not None else {}
         WT = ctx.get("WT", W.T); WT = WT() if callable(WT) else (W.T if WT is None else WT)
         XT = ctx.get("XT", X.T); XT = XT() if callable(XT) else (X.T if XT is None else XT)
 
@@ -908,7 +908,7 @@ class Embedding(Layer):
         #         to get the overall contribution of each entry toward the loss across ALL of the samples from the batch.
         # That is why we sum.
 
-        ctx = context or {}
+        ctx = context if context is not None else {}
         I = ctx.get("idx_flat")
         I = I() if callable(I) else I
         if I is None:
@@ -1088,7 +1088,7 @@ def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
     )
     if X.ndim != 4:
         raise ValueError(f"_unfold2d_grad expects X with shape (B, C, H, W), got {X.shape}")
-    ctx = context or {}
+    ctx = context if context is not None else {}
     if any(k not in ctx for k in ("c_idx", "h_idx", "w_idx", "pH", "pW")):
         raise RuntimeError("_unfold2d_grad requires c_idx/h_idx/w_idx/pH/pW in context")
     c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx          # (C*K, 1) (note the call operator due to lazy caching)
@@ -1314,7 +1314,7 @@ def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | 
     )
     if X.ndim != 3:
         raise ValueError(f"_unfold1d_grad expects X with shape (B, C, L), got {X.shape}")
-    ctx = context or {}
+    ctx = context if context is not None else {}
     if any(k not in ctx for k in ("c_idx", "l_idx", "pL")):
         raise RuntimeError("_unfold1d_grad requires c_idx/l_idx/pL in context")
     c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx

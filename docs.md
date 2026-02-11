@@ -104,7 +104,10 @@ x.zero_grad()         # sets grad to None
 - Elementwise arithmetic: `+`, `-`, `*`, `/`, `**`, unary `-`
 - Comparisons: `.eq`, `.ne`, `.lt`, `.le`, `.gt`, `.ge` (return no-grad tensors)
 - Reductions: `.all`, `.any`; `.argmax(axis, keepdims=False)` (non-differentiable)
-- Linear algebra: `.T`, `@` (batched matmul supported)
+- Linear algebra: `.T`, `@` (batched matmul supported), `.dot(other)`
+  - `Tensor.dot` supports only `1D·1D -> scalar` and `2D·2D -> matrix`.
+  - Mixed-rank or rank>2 inputs are rejected with explicit shape/rank errors.
+- Axis permutation: `.general_transpose(order)` for arbitrary N-D transposes with autodiff support.
 - Reshaping: `.reshape(*shape)`, `.flatten(keep_batch=True, sample_ndim=None)`
 - Indexing: `x[...]` uses NumPy semantics; backward scatter-adds into a zeros-like array of the input shape (supports advanced/repeated indices).
 - Math helpers: `pureml.machinery.sqrt`, `ln`, `log2`
@@ -173,6 +176,20 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Gradients accumulate correctly for repeated indices. Buffers persist `padding_idx`, `seed`, `method`.
 
 - **Initializer**: `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
+
+### Unfold helpers
+
+- `unfold1d(X, kernel_size, stride, padding, dilation, pad_with=0.0)`  
+  - Input shape: `(B, C, L)`  
+  - Output shape: `(B, C*kL, L_out)` where `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`  
+  - Backward pass uses scatter-add into padded input space, then crops back to `(B, C, L)`.
+
+- `unfold2d(X, kernel_size, stride, padding, dilation, pad_with=0.0)`  
+  - Input shape: `(B, C, H, W)`  
+  - Output shape: `(B, C*kH*kW, H_out*W_out)` where  
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`  
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - Backward pass uses scatter-add into padded input space, then crops back to `(B, C, H, W)`.
 
 ---
 
@@ -356,3 +373,9 @@ test  = MnistDataset("test")    # (Tensor image, class index)
 - `KNN(k, d=euclidean_distance, standardize_features=True)`:
   - `fit(X, Y)`: stores samples/labels; optionally z-scores features per dimension (mean/std computed under `no_grad`). Enforces `1 <= k <= #samples` and matching sample counts.
   - `predict(x_q)`: standardizes the query if enabled, computes distances row-wise via `d`, selects `k` nearest labels, and breaks ties by nearest distance order.
+
+---
+
+## Contributing and Protocols
+
+For development workflow, architecture contracts, protocol rules, and release/branching guidance, see `CONTRIBUTING.md` in the repository root.

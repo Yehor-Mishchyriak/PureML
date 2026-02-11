@@ -1056,7 +1056,8 @@ def _unfold2d(
     finalW = W_koords[..., None] + W_centers[None, ...]
     # ^^^ for each kernel element and each output position, compute absolute y/x in padded image
 
-    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1) -- because from each channel C, we need to extract an entry K
+    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1) -- channel ids 0..C-1, each repeated K times (one row per kernel tap);
+    #          ^ ^ ^ fancy indexing needs explicit per-row channel coordinates.
     h_idx = np.tile(finalH, (C, 1))              # (C*K, P) -- we do it for each output location so there is P
     w_idx = np.tile(finalW, (C, 1))              # (C*K, P) -- and this is within both H and W axes
 

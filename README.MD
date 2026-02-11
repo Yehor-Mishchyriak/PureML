@@ -37,27 +37,29 @@ The only runtime deps are: `numpy`, `zarr`
 
 ## v1.2.9 — What’s new
 - **New layers:**
-  - Conv1D: ...
-  - Conv2D: ...
-  - MeanPool1D: ...
-  - MaxPool1D: ...
-  - AdaPool1D: ...
-  - MeanPool2D: ...
-  - MaxPool2D: ...
-  - AdaPool2D: ...
-  - LayerNorm1D: ...
+  - Conv1D: **IMPLEMENTATION PENDING**
+  - Conv2D: **IMPLEMENTATION PENDING**
+  - MeanPool1D: **IMPLEMENTATION PENDING**
+  - MaxPool1D: **IMPLEMENTATION PENDING**
+  - AdaPool1D: **IMPLEMENTATION PENDING**
+  - MeanPool2D: **IMPLEMENTATION PENDING**
+  - MaxPool2D: **IMPLEMENTATION PENDING**
+  - AdaPool2D: **IMPLEMENTATION PENDING**
+  - LayerNorm1D: **IMPLEMENTATION PENDING**
 - **Clear development protocols:**
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.
   - New validator functions used during development to aid codebase consistency.
 - **New weight initialization:**
-  - Kaiming initialization: ...
+  - Kaiming normal initialization: **IMPLEMENTATION PENDING**
 - **Additional Tensor operations:**
   - Tensor.dot: Added a shape-validated dot op with explicit VJPs for `1D·1D` and `2D·2D` cases (mixed-rank and invalid-shape inputs raise clear errors).
   - Tensor.general_transpose: Added N-D axis permutation with backward support via cached inverse permutation.
-  - Tensor.squeeze: ...
-  - Tensor.unsqueeze: ...
+  - Tensor.squeeze: **IMPLEMENTATION PENDING**
+  - Tensor.unsqueeze: **IMPLEMENTATION PENDING**
   - unfold1d: Added autograd-aware 1D unfolding (`(B, C, L) -> (B, C*kL, L_out)`) with stride/padding/dilation and scatter-add backward.
   - unfold2d: Added autograd-aware 2D unfolding (`(B, C, H, W) -> (B, C*kH*kW, H_out*W_out)`) with stride/padding/dilation and scatter-add backward.
+- **Miscellaneous:**
+  - calculate_gain: **IMPLEMENTATION PENDING**
 
 ## v1.2.8 — What’s new
 - **Modernization of packaging and CI/CD, documentation and attribution fixes, and the addition of community guidelines.**

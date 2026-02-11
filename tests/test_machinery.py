@@ -140,6 +140,96 @@ class TestMatrixOps(ut.TestCase):
         with self.assertRaises(ValueError):
             _ = X.general_transpose((0, 1))  # wrong rank
 
+class TestDotOps(ut.TestCase):
+    def test_dot_1d_forward_matches_numpy_and_scalar_shape(self):
+        rng = _rng(11)
+        x = pm.Tensor(rng.standard_normal(7), requires_grad=False)
+        y = pm.Tensor(rng.standard_normal(7), requires_grad=False)
+
+        z = x.dot(y)
+        self.assertEqual(z.data.shape, ())
+        np.testing.assert_allclose(z.data, np.dot(x.data, y.data), rtol=1e-6, atol=1e-8)
+
+    def test_dot_1d_backward_with_custom_upstream(self):
+        rng = _rng(12)
+        x = pm.Tensor(rng.standard_normal(9), requires_grad=True)
+        y = pm.Tensor(rng.standard_normal(9), requires_grad=True)
+
+        z = x.dot(y)  # scalar
+        upstream = np.array(2.5)
+        z.backward(upstream)
+
+        np.testing.assert_allclose(x.grad, upstream * y.data, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(y.grad, upstream * x.data, rtol=1e-6, atol=1e-8)
+
+    def test_dot_2d_forward_matches_numpy(self):
+        rng = _rng(13)
+        X = pm.Tensor(rng.standard_normal((3, 5)), requires_grad=False)
+        Y = pm.Tensor(rng.standard_normal((5, 4)), requires_grad=False)
+
+        Z = X.dot(Y)
+        self.assertEqual(Z.data.shape, (3, 4))
+        np.testing.assert_allclose(Z.data, np.dot(X.data, Y.data), rtol=1e-6, atol=1e-8)
+
+    def test_dot_2d_backward_with_custom_upstream(self):
+        rng = _rng(14)
+        X = pm.Tensor(rng.standard_normal((4, 6)), requires_grad=True)
+        Y = pm.Tensor(rng.standard_normal((6, 3)), requires_grad=True)
+
+        Z = X.dot(Y)
+        upstream = rng.standard_normal((4, 3))
+        Z.backward(upstream)
+
+        dX_expected = upstream @ Y.data.T
+        dY_expected = X.data.T @ upstream
+        np.testing.assert_allclose(X.grad, dX_expected, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(Y.grad, dY_expected, rtol=1e-6, atol=1e-8)
+
+    def test_dot_requires_grad_propagation(self):
+        rng = _rng(15)
+        x = pm.Tensor(rng.standard_normal(5), requires_grad=True)
+        y = pm.Tensor(rng.standard_normal(5), requires_grad=False)
+
+        z = x.dot(y)
+        self.assertTrue(z.requires_grad)
+
+        z.backward(np.array(1.0))
+        self.assertIsNotNone(x.grad)
+        self.assertIsNone(y.grad)
+        np.testing.assert_allclose(x.grad, y.data, rtol=1e-6, atol=1e-8)
+
+    def test_dot_rejects_mixed_rank_inputs(self):
+        x1 = pm.Tensor(np.ones((3,)), requires_grad=False)
+        y2 = pm.Tensor(np.ones((3, 2)), requires_grad=False)
+        x2 = pm.Tensor(np.ones((2, 3)), requires_grad=False)
+        y1 = pm.Tensor(np.ones((3,)), requires_grad=False)
+
+        with self.assertRaises(ValueError):
+            _ = x1.dot(y2)
+        with self.assertRaises(ValueError):
+            _ = x2.dot(y1)
+
+    def test_dot_rejects_rank_greater_than_two(self):
+        X = pm.Tensor(np.ones((2, 3, 4)), requires_grad=False)
+        Y = pm.Tensor(np.ones((2, 3, 4)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.dot(Y)
+
+    def test_dot_rejects_shape_mismatch(self):
+        x_bad = pm.Tensor(np.ones((3,)), requires_grad=False)
+        y_bad = pm.Tensor(np.ones((4,)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = x_bad.dot(y_bad)
+
+        X_bad = pm.Tensor(np.ones((2, 3)), requires_grad=False)
+        Y_bad = pm.Tensor(np.ones((4, 2)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X_bad.dot(Y_bad)
+
+    def test_dot_grad_without_context_raises(self):
+        with self.assertRaises(RuntimeError):
+            _ = mach._dot_grad(np.array(1.0), np.ones((3,)), np.ones((3,)))
+
 class TestReshapeFlatten(ut.TestCase):
     def test_reshape_backward(self):
         rng = _rng(6)

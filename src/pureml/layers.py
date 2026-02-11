@@ -208,7 +208,7 @@ class Affine(Layer):
     def __init__(self,
                  fan_in: int,
                  fan_out: int, 
-                 method="xavier-glorot-normal", 
+                 method: Literal["xavier-glorot-normal"] = "xavier-glorot-normal",
                  W: Tensor | None = None, 
                  b: Tensor | None = None,
                  *,
@@ -770,7 +770,7 @@ class Embedding(Layer):
         D: int,
         *,
         pad_idx: int | None = None,
-        method="xavier-glorot-normal",
+        method: Literal["xavier-glorot-normal"] = "xavier-glorot-normal",
         W: Tensor | None = None,
         training: bool = True,
         seed: int | None = None
@@ -1459,7 +1459,7 @@ class Conv2D(Layer):
         use_bias: bool = True,
         pad_with: float = 0.0,
         *,
-        method="kaiming",
+        method: Literal["kaiming_normal"] = "kaiming_normal",
         training: bool = True,
         seed: int | None = None):
 
@@ -1476,7 +1476,7 @@ class Conv2D(Layer):
         self.use_bias = bool(use_bias)
 
         try:
-            init_fn = {"kaiming": kaiming}[method]
+            init_fn = {"kaiming_normal": kaiming_normal}[method]
         except KeyError as e:
             raise ValueError(f"Unknown init method '{method}'") from e
 

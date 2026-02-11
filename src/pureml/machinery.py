@@ -898,7 +898,7 @@ def _dot(X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> np.nda
     Any mixed-rank case (e.g. 1D·2D) or rank > 2 is rejected intentionally.
     """
     _logger.debug("_dot forward: X.shape=%s, Y.shape=%s", getattr(X, "shape", None), getattr(Y, "shape", None))
-    ctx = context or {}
+    ctx = context if context is not None else {}
     if X.ndim == 1:
         if Y.ndim != 1:
             raise ValueError(f"dot expects Y to be 1D when X is 1D; got X.ndim={X.ndim}, Y.ndim={Y.ndim}")

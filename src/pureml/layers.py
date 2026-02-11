@@ -1488,7 +1488,10 @@ class Conv2D(Layer):
         self.pad_with = pad_with
 
         # trainable parameters
-        self.kernels: list[Tensor] = [init_fn(in_channels, out_channels, kernel_size)] * out_channels
+        self.kernels: list[Tensor] = [
+                init_fn(in_channels, out_channels, kernel_size)
+                for _ in range(out_channels)
+            ]
     
     @staticmethod
     def _pair(v: int | tuple[int, int]):

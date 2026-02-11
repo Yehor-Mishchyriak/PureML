@@ -883,25 +883,91 @@ def _matmul(A: np.ndarray, B: np.ndarray, *, context: dict | None = None) -> np.
 @_shape_safe_grad
 def _matmul_grad(up: np.ndarray, A: np.ndarray, B: np.ndarray, *, context: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
     # up:(..., i, j) ; A:(..., i, k) ; B:(..., k, j)
-    dA = up @ np.swapaxes(B, -1, -2)            # (..., i, k)
-    dB = np.swapaxes(A, -1, -2) @ up            # (..., k, j)
-    return dA, dB
+    dL_dA = up @ np.swapaxes(B, -1, -2)            # (..., i, k)
+    dL_dB = np.swapaxes(A, -1, -2) @ up            # (..., k, j)
+    # ^ ^ ^ note: np.swapaxes(A, -1, -2) is transpose of each 2D slice
+    return dL_dA, dL_dB
 
 def _dot(X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> np.ndarray:
-    raise NotImplementedError("The function has not been implemented")
+    """Restricted dot product.
 
+    Supported cases:
+      1) vector·vector: ``(n,) · (n,) -> ()``
+      2) matrix·matrix: ``(m, n) · (n, p) -> (m, p)``
+
+    Any mixed-rank case (e.g. 1D·2D) or rank > 2 is rejected intentionally.
+    """
+    _logger.debug("_dot forward: X.shape=%s, Y.shape=%s", getattr(X, "shape", None), getattr(Y, "shape", None))
+    ctx = context or {}
+    if X.ndim == 1:
+        if Y.ndim != 1:
+            raise ValueError(f"dot expects Y to be 1D when X is 1D; got X.ndim={X.ndim}, Y.ndim={Y.ndim}")
+        if Y.shape[0] != X.shape[0]:
+            raise ValueError(f"dot shape mismatch for 1D inputs: X.shape={X.shape}, Y.shape={Y.shape}")
+        _update_ctx(ctx, dims=1)
+        out = np.dot(X, Y)
+        _logger.debug("_dot forward path=1Dx1D: out.shape=%s", getattr(out, "shape", ()))
+        return out
+    elif X.ndim == 2:
+        if Y.ndim != 2:
+            raise ValueError(f"dot expects Y to be 2D when X is 2D; got X.ndim={X.ndim}, Y.ndim={Y.ndim}")
+        if X.shape[1] != Y.shape[0]:
+            raise ValueError(
+                f"dot shape mismatch for 2D inputs: X.shape={X.shape}, Y.shape={Y.shape}; "
+                f"expected X.shape[1] == Y.shape[0]"
+            )
+        _update_ctx(ctx, dims=2)
+        out = X @ Y
+        _logger.debug("_dot forward path=2Dx2D: out.shape=%s", getattr(out, "shape", None))
+        return out
+    else:
+        raise ValueError(
+            f"dot supports only 1D·1D or 2D·2D inputs, got X.ndim={X.ndim}, Y.ndim={Y.ndim}"
+        )
+
+@_shape_safe_grad
 def _dot_grad(upstream: np.ndarray, X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
-    raise NotImplementedError("The function has not been implemented")
+    """Gradient for restricted dot.
+
+    Uses context["dims"] recorded in forward to dispatch between:
+      - 1D·1D: scalar output
+      - 2D·2D: matrix output
+    """
+    _logger.debug(
+        "_dot_grad backward: upstream.shape=%s, X.shape=%s, Y.shape=%s",
+        getattr(upstream, "shape", None), getattr(X, "shape", None), getattr(Y, "shape", None)
+    )
+    if context is None:
+        raise RuntimeError("_dot_grad requires supplied context")
+    match context.get("dims"):
+        case 1:
+            # upstream is a scalar (xTy is 0-dim)
+            dL_dX = upstream * Y
+            dL_dY = upstream * X
+            _logger.debug("_dot_grad backward path=1Dx1D: dL_dX.shape=%s, dL_dY.shape=%s", dL_dX.shape, dL_dY.shape)
+        case 2:
+            # upstream is a matrix (XTY is 2-dim)
+            dL_dX = upstream @ Y.T
+            dL_dY = X.T @ upstream
+            _logger.debug("_dot_grad backward path=2Dx2D: dL_dX.shape=%s, dL_dY.shape=%s", dL_dX.shape, dL_dY.shape)
+        case _:
+            raise RuntimeError(
+                "dot backward is missing or has invalid forward context key 'dims'; "
+                f"received dims={context.get('dims')!r}"
+            )
+    return dL_dX, dL_dY
 
 def _squeeze(X: np.ndarray, dim: int | tuple[int, ...], *, context: dict | None = None) -> np.ndarray:
     raise NotImplementedError("The function has not been implemented")
 
+@_shape_safe_grad
 def _squeeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
     raise NotImplementedError("The function has not been implemented")
 
 def _unsqueeze(X: np.ndarray, dim: int, *, context: dict | None = None) -> np.ndarray:
     raise NotImplementedError("The function has not been implemented")
 
+@_shape_safe_grad
 def _unsqueeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
     raise NotImplementedError("The function has not been implemented")
 

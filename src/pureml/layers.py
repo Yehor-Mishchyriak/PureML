@@ -73,13 +73,32 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
-def kaiming(
+# REFERENCE: https://docs.pytorch.org/docs/stable/nn.init.html
+#                         | | |  (see: torch.nn.init.kaiming_normal_, and
+#                         V V V        torch.nn.init.calculate_gain)
+
+def calculate_gain(
+        nonlinearity: Literal[
+                        'Affine',
+                        'Conv1D',
+                        'Conv2D',
+                        "sigmoid",
+                        "tanh",
+                        "relu",
+                        "leaky_relu"],
+        param:        int | float | None):
+    raise NotImplementedError("The recommended gain value computation function has not yet been implemented")
+
+def kaiming_normal(
     fan_in: int,
     fan_out: int,
+    nonlinearity: str,
+    mode: Literal["fan_in", "fan_out"] = "fan_in",
     *,
     rng: np.random.Generator | None = None
 ) -> tuple[Tensor, Tensor]:
-    pass
+    # The method is described in Delving deep into rectifiers: Surpassing human-level performance on ImageNet classification - He, K. et al. (2015).
+    raise NotImplementedError("The kaiming_normal initialization has not yet been implemented")
 
 # *----------------------------------------------------*
 

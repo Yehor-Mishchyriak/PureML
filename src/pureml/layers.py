@@ -24,6 +24,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from math import floor
 import logging
+from typing import Literal
 # local
 from .machinery import (
     Tensor, TensorValuedFunction, _shape_safe_grad, _update_ctx, sqrt

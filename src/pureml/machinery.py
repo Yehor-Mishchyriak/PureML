@@ -957,19 +957,109 @@ def _dot_grad(upstream: np.ndarray, X: np.ndarray, Y: np.ndarray, *, context: di
             )
     return dL_dX, dL_dY
 
-def _squeeze(X: np.ndarray, dim: int | tuple[int, ...], *, context: dict | None = None) -> np.ndarray:
-    raise NotImplementedError("The function has not been implemented")
+def _squeeze(X: np.ndarray, dim: int | tuple[int, ...] | None, *, context: dict | None = None) -> np.ndarray:
+    """Remove singleton dimensions from ``X``.
+
+    Args:
+        X: Input array.
+        dim: Axis or axes to squeeze. If ``None``, squeeze all singleton axes.
+        context: Optional node context cache.
+
+    Returns:
+        np.ndarray: Squeezed array.
+
+    Raises:
+        TypeError: If ``dim`` is not ``None``, ``int``, or ``tuple[int, ...]``.
+        ValueError: For duplicate/out-of-range axes or non-singleton target axes.
+    """
+    ctx = context if context is not None else {}
+
+    if dim is not None and not isinstance(dim, (int, tuple)):
+        raise TypeError(f"_squeeze dim must be int | tuple[int, ...] | None, got {type(dim).__name__}.")
+
+    if isinstance(dim, tuple):
+        if any(not isinstance(d, int) for d in dim):
+            raise TypeError(f"_squeeze dim tuple must contain only ints, got {dim!r}.")
+        if len(set(dim)) != len(dim):
+            raise ValueError(f"_squeeze dim tuple contains duplicates: {dim!r}.")
+        nd = X.ndim
+        norm = tuple(d + nd if d < 0 else d for d in dim)
+        if any(d < 0 or d >= nd for d in norm):
+            raise ValueError(f"_squeeze axis out of range for X.ndim={X.ndim}: dim={dim!r}.")
+        bad = [d for d in norm if X.shape[d] != 1]
+        if bad:
+            raise ValueError(
+                f"_squeeze can only remove singleton axes; got non-singleton axes {bad} for shape {X.shape}."
+            )
+    elif isinstance(dim, int):
+        d = dim + X.ndim if dim < 0 else dim
+        if d < 0 or d >= X.ndim:
+            raise ValueError(f"_squeeze axis {dim} out of range for X.ndim={X.ndim}.")
+        if X.shape[d] != 1:
+            raise ValueError(
+                f"_squeeze axis {dim} has size {X.shape[d]} (shape={X.shape}); only size-1 axes are squeezable."
+            )
+
+    try:
+        X = np.squeeze(X, axis=dim)
+    except ValueError as e:
+        raise ValueError(f"_squeeze failed for shape={X.shape}, dim={dim!r}.") from e
+
+    _update_ctx(ctx, dim=dim)
+    return X
 
 @_shape_safe_grad
 def _squeeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
-    raise NotImplementedError("The function has not been implemented")
+    """Backward for squeeze: restore the original input shape."""
+    if context is None:
+        raise RuntimeError("_squeeze_grad requires a context dict supplied by TensorValuedFunction.")
+    try:
+        return upstream.reshape(X.shape)
+    except ValueError as e:
+        raise ValueError(
+            f"_squeeze_grad cannot reshape upstream shape {upstream.shape} back to input shape {X.shape}."
+        ) from e
 
 def _unsqueeze(X: np.ndarray, dim: int, *, context: dict | None = None) -> np.ndarray:
-    raise NotImplementedError("The function has not been implemented")
+    """Insert a singleton dimension into ``X`` at ``dim``."""
+    ctx = context if context is not None else {}
+    if dim is None:
+        raise TypeError("_unsqueeze requires an integer dim; got None.")
+    if not isinstance(dim, int):
+        raise TypeError(f"_unsqueeze dim must be int, got {type(dim).__name__}.")
+
+    min_dim = -X.ndim - 1
+    max_dim = X.ndim
+    if dim < min_dim or dim > max_dim:
+        raise ValueError(f"_unsqueeze axis {dim} out of range for X.ndim={X.ndim} (valid: [{min_dim}, {max_dim}]).")
+
+    X = np.expand_dims(X, axis=dim)
+    norm_dim = dim if dim >= 0 else dim + X.ndim
+    _update_ctx(ctx, dim=norm_dim)
+    return X
 
 @_shape_safe_grad
 def _unsqueeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
-    raise NotImplementedError("The function has not been implemented")
+    """Backward for unsqueeze: remove the inserted singleton dimension."""
+    if context is None:
+        raise RuntimeError("_unsqueeze_grad requires a context dict supplied by TensorValuedFunction.")
+    if "dim" not in context:
+        raise RuntimeError("_unsqueeze_grad missing 'dim' in context (must be cached in forward).")
+    dim = context.get("dim")
+    if not isinstance(dim, int):
+        raise TypeError(f"_unsqueeze_grad context['dim'] must be int, got {type(dim).__name__}.")
+    if dim < 0 or dim >= upstream.ndim:
+        raise ValueError(f"_unsqueeze_grad axis {dim} out of range for upstream.ndim={upstream.ndim}.")
+    if upstream.shape[dim] != 1:
+        raise ValueError(
+            f"_unsqueeze_grad expected singleton size on axis {dim}, got upstream shape {upstream.shape}."
+        )
+    g = np.squeeze(upstream, axis=dim)
+    if g.shape != X.shape:
+        raise RuntimeError(
+            f"_unsqueeze_grad produced shape {g.shape}, expected original input shape {X.shape}."
+        )
+    return g
 
 def _reshape_fwd(new_shape: tuple[int, ...]):
     def _reshape(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:

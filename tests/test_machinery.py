@@ -230,6 +230,146 @@ class TestDotOps(ut.TestCase):
         with self.assertRaises(RuntimeError):
             _ = mach._dot_grad(np.array(1.0), np.ones((3,)), np.ones((3,)))
 
+class TestSqueezeUnsqueeze(ut.TestCase):
+    def test_squeeze_forward_dim_none_removes_all_singletons(self):
+        X_np = _rng(21).standard_normal((1, 2, 1, 3, 1))
+        X = pm.Tensor(X_np, requires_grad=False)
+
+        Y = X.squeeze()
+        self.assertEqual(Y.data.shape, (2, 3))
+        np.testing.assert_allclose(Y.data, np.squeeze(X_np), rtol=1e-6, atol=1e-8)
+
+    def test_squeeze_forward_single_axis_positive_and_negative(self):
+        X_np = _rng(22).standard_normal((2, 1, 3))
+        X = pm.Tensor(X_np, requires_grad=False)
+
+        Y_pos = X.squeeze(1)
+        Y_neg = X.squeeze(-2)
+        self.assertEqual(Y_pos.data.shape, (2, 3))
+        self.assertEqual(Y_neg.data.shape, (2, 3))
+        np.testing.assert_allclose(Y_pos.data, np.squeeze(X_np, axis=1), rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(Y_neg.data, np.squeeze(X_np, axis=-2), rtol=1e-6, atol=1e-8)
+
+    def test_squeeze_forward_tuple_axes(self):
+        X_np = _rng(23).standard_normal((1, 2, 1, 4, 1))
+        X = pm.Tensor(X_np, requires_grad=False)
+        Y = X.squeeze((0, 2, 4))
+
+        self.assertEqual(Y.data.shape, (2, 4))
+        np.testing.assert_allclose(Y.data, np.squeeze(X_np, axis=(0, 2, 4)), rtol=1e-6, atol=1e-8)
+
+    def test_squeeze_backward_with_custom_upstream(self):
+        rng = _rng(24)
+        X = pm.Tensor(rng.standard_normal((2, 1, 3, 1)), requires_grad=True)
+        Y = X.squeeze((1, 3))  # -> (2,3)
+
+        upstream = rng.standard_normal((2, 3))
+        Y.backward(upstream)
+        np.testing.assert_allclose(X.grad, upstream.reshape(X.data.shape), rtol=1e-6, atol=1e-8)
+
+    def test_squeeze_rejects_non_singleton_axis(self):
+        X = pm.Tensor(np.zeros((2, 3, 1)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.squeeze(1)
+
+    def test_squeeze_rejects_axis_out_of_range(self):
+        X = pm.Tensor(np.zeros((2, 1, 3)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.squeeze(3)
+        with self.assertRaises(ValueError):
+            _ = X.squeeze(-4)
+
+    def test_squeeze_rejects_duplicate_axes(self):
+        X = pm.Tensor(np.zeros((1, 2, 1)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.squeeze((0, 0))
+
+    def test_squeeze_rejects_invalid_dim_types(self):
+        X = pm.Tensor(np.zeros((1, 2, 1)), requires_grad=False)
+        with self.assertRaises(TypeError):
+            _ = X.squeeze([0, 2])  # list is not accepted by current API
+        with self.assertRaises(TypeError):
+            _ = X.squeeze((0, "2"))  # tuple entries must be ints
+
+    def test_squeeze_grad_without_context_raises(self):
+        with self.assertRaises(RuntimeError):
+            _ = mach._squeeze_grad(np.ones((2, 3)), np.ones((2, 1, 3)))
+
+    def test_squeeze_grad_bad_reshape_raises(self):
+        with self.assertRaises(ValueError):
+            _ = mach._squeeze_grad(np.ones((2, 2)), np.ones((2, 1, 3)), context={})
+
+    def test_unsqueeze_forward_axes(self):
+        X_np = _rng(25).standard_normal((2, 3))
+        X = pm.Tensor(X_np, requires_grad=False)
+
+        Y0 = X.unsqueeze(0)    # front
+        Y1 = X.unsqueeze(1)    # middle
+        Y2 = X.unsqueeze(2)    # end
+        Ym = X.unsqueeze(-3)   # minimal negative axis for ndim=2
+
+        self.assertEqual(Y0.data.shape, (1, 2, 3))
+        self.assertEqual(Y1.data.shape, (2, 1, 3))
+        self.assertEqual(Y2.data.shape, (2, 3, 1))
+        self.assertEqual(Ym.data.shape, (1, 2, 3))
+        np.testing.assert_allclose(Y0.data, np.expand_dims(X_np, axis=0), rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(Y1.data, np.expand_dims(X_np, axis=1), rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(Y2.data, np.expand_dims(X_np, axis=2), rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(Ym.data, np.expand_dims(X_np, axis=-3), rtol=1e-6, atol=1e-8)
+
+    def test_unsqueeze_backward_with_custom_upstream(self):
+        rng = _rng(26)
+        X = pm.Tensor(rng.standard_normal((4, 5)), requires_grad=True)
+        Y = X.unsqueeze(1)  # -> (4,1,5)
+
+        upstream = rng.standard_normal((4, 1, 5))
+        Y.backward(upstream)
+        np.testing.assert_allclose(X.grad, np.squeeze(upstream, axis=1), rtol=1e-6, atol=1e-8)
+
+    def test_unsqueeze_rejects_none_and_non_int_dim(self):
+        X = pm.Tensor(np.zeros((2, 3)), requires_grad=False)
+        with self.assertRaises(TypeError):
+            _ = X.unsqueeze(None)
+        with self.assertRaises(TypeError):
+            _ = X.unsqueeze("1")
+
+    def test_unsqueeze_rejects_axis_out_of_range(self):
+        X = pm.Tensor(np.zeros((2, 3)), requires_grad=False)
+        with self.assertRaises(ValueError):
+            _ = X.unsqueeze(3 + 1)  # valid max is ndim
+        with self.assertRaises(ValueError):
+            _ = X.unsqueeze(-4)     # valid min is -ndim-1
+
+    def test_unsqueeze_grad_missing_context_or_dim_raises(self):
+        with self.assertRaises(RuntimeError):
+            _ = mach._unsqueeze_grad(np.ones((2, 1, 3)), np.ones((2, 3)))
+        with self.assertRaises(RuntimeError):
+            _ = mach._unsqueeze_grad(np.ones((2, 1, 3)), np.ones((2, 3)), context={})
+
+    def test_unsqueeze_grad_invalid_dim_type_raises(self):
+        with self.assertRaises(TypeError):
+            _ = mach._unsqueeze_grad(
+                np.ones((2, 1, 3)),
+                np.ones((2, 3)),
+                context={"dim": "1"},
+            )
+
+    def test_unsqueeze_grad_non_singleton_axis_raises(self):
+        with self.assertRaises(ValueError):
+            _ = mach._unsqueeze_grad(
+                np.ones((2, 2, 3)),
+                np.ones((2, 3)),
+                context={"dim": 1},
+            )
+
+    def test_unsqueeze_grad_shape_mismatch_raises(self):
+        with self.assertRaises(RuntimeError):
+            _ = mach._unsqueeze_grad(
+                np.ones((2, 1, 3)),
+                np.ones((2, 4)),
+                context={"dim": 1},
+            )
+
 class TestReshapeFlatten(ut.TestCase):
     def test_reshape_backward(self):
         rng = _rng(6)

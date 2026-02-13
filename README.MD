@@ -45,7 +45,7 @@ The only runtime deps are: `numpy`, `zarr`
   - MeanPool2D: **IMPLEMENTATION PENDING**
   - MaxPool2D: **IMPLEMENTATION PENDING**
   - AdaPool2D: **IMPLEMENTATION PENDING**
-  - LayerNorm1D: **IMPLEMENTATION PENDING**
+  - LayerNorm: **IMPLEMENTATION PENDING**
 - **Clear development protocols:**
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.
   - New validator functions used during development to aid codebase consistency.

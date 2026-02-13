@@ -54,8 +54,8 @@ The only runtime deps are: `numpy`, `zarr`
 - **Additional Tensor operations:**
   - Tensor.dot: Added a shape-validated dot op with explicit VJPs for `1D·1D` and `2D·2D` cases (mixed-rank and invalid-shape inputs raise clear errors).
   - Tensor.general_transpose: Added N-D axis permutation with backward support via cached inverse permutation.
-  - Tensor.squeeze: **IMPLEMENTATION PENDING**
-  - Tensor.unsqueeze: **IMPLEMENTATION PENDING**
+  - Tensor.squeeze: Removes size-1 dimensions from tensors (like NumPy `squeeze`) while keeping gradients correct.
+  - Tensor.unsqueeze: Inserts a size-1 dimension at a chosen axis (like NumPy `expand_dims`) while keeping gradients correct.
   - unfold1d: Added autograd-aware 1D unfolding (`(B, C, L) -> (B, C*kL, L_out)`) with stride/padding/dilation and scatter-add backward.
   - unfold2d: Added autograd-aware 2D unfolding (`(B, C, H, W) -> (B, C*kH*kW, H_out*W_out)`) with stride/padding/dilation and scatter-add backward.
 - **Miscellaneous:**

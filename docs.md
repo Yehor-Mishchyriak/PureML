@@ -108,9 +108,48 @@ x.zero_grad()         # sets grad to None
   - `Tensor.dot` supports only `1D·1D -> scalar` and `2D·2D -> matrix`.
   - Mixed-rank or rank>2 inputs are rejected with explicit shape/rank errors.
 - Axis permutation: `.general_transpose(order)` for arbitrary N-D transposes with autodiff support.
-- Reshaping: `.reshape(*shape)`, `.flatten(keep_batch=True, sample_ndim=None)`
+- Reshaping: `.reshape(*shape)`, `.flatten(keep_batch=True, sample_ndim=None)`, `.squeeze(dim=None)`, `.unsqueeze(dim)`
 - Indexing: `x[...]` uses NumPy semantics; backward scatter-adds into a zeros-like array of the input shape (supports advanced/repeated indices).
 - Math helpers: `pureml.machinery.sqrt`, `ln`, `log2`
+
+### Squeeze and Unsqueeze (`Tensor`)
+
+Use these when you need to explicitly control singleton dimensions (`size == 1`) without breaking autograd.
+
+- `x.squeeze(dim=None)`
+  - Removes singleton dimensions.
+  - `dim=None`: remove all singleton axes.
+  - `dim=int | tuple[int, ...]`: remove only the specified singleton axis/axes.
+  - Raises if any specified axis is not singleton.
+
+- `x.unsqueeze(dim)`
+  - Inserts a singleton dimension at axis `dim`.
+  - Valid range for `dim` when `x.ndim = n`: `[-n-1, n]`.
+  - Useful for making shapes broadcast-compatible or adding channel/batch-style axes.
+
+When to use:
+- Remove trailing singleton dims from model outputs before loss/metrics.
+- Add a channel axis for convolution-style inputs.
+- Align shapes intentionally for broadcasting (instead of relying on accidental broadcasting).
+
+Examples:
+
+```python
+import numpy as np
+from pureml import Tensor
+
+# Remove singleton dims
+logits = Tensor(np.random.randn(32, 10, 1), requires_grad=True)
+logits2d = logits.squeeze(-1)      # (32, 10)
+
+# Add channel dim
+images = Tensor(np.random.randn(32, 28, 28), requires_grad=True)
+images_nchw = images.unsqueeze(1)  # (32, 1, 28, 28)
+
+# Gradients flow through both ops
+out = (images_nchw * images_nchw).reshape(32, -1)
+out.backward()
+```
 
 ### Defining custom ops
 

@@ -736,7 +736,7 @@ class BatchNorm1d(Layer):
         _logger.debug("BN1d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
-class LayerNorm1d(Layer):
+class LayerNorm(Layer):
     pass
 
 class Embedding(Layer):

@@ -387,7 +387,7 @@ class Tensor:
     def squeeze(self, dim: int | tuple[int, ...] = None) -> Tensor:
         return TensorValuedFunction(_squeeze, _squeeze_grad)(self, dim=dim)
 
-    def unsqueeze(self, dim: int = None) -> Tensor:
+    def unsqueeze(self, dim: int) -> Tensor:
         return TensorValuedFunction(_unsqueeze, _unsqueeze_grad)(self, dim=dim)
 
     def reshape(self, *shape: int) -> Tensor:

@@ -166,13 +166,19 @@ class Layer(ABC):
         self._validate_contract()
         # write trainables in-order
         if tunable:
+            if len(tunable) != len(self.parameters):
+                raise ValueError(
+                    f"{self.__class__.__name__}.apply_state expected {len(self.parameters)} tunable arrays; got {len(tunable)}"
+                )
             for t, arr in zip(self.parameters, tunable):
+                if arr is None:
+                    continue
                 t.data = np.asarray(arr, dtype=t.data.dtype)
 
         # write buffers by name (only if buffer is a Tensor)
         if buffers:
             for name, v in self.named_buffers().items():
-                if name in buffers and isinstance(v, Tensor):
+                if name in buffers and buffers[name] is not None and isinstance(v, Tensor):
                     v.data = np.asarray(buffers[name], dtype=v.data.dtype)
 
 class Affine(Layer):
@@ -563,8 +569,8 @@ class Dropout(Layer):
         )
         # elementwise upstream mult is by the same logic as for, say, relu
         grad_X = upstream_grad * (mask * scale) # (mask * scale) is the local grad
-        # mask/scale are not trainable; return zeros of matching shapes
-        return grad_X, np.zeros_like(mask), np.zeros_like(scale)
+        # mask/scale are non-differentiable constants for this op
+        return grad_X, None, None
 
     def __call__(self, X: Tensor) -> Tensor:
         """Apply dropout to `X` in training mode; identity in eval mode.

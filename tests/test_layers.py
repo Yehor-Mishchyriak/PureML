@@ -4,7 +4,7 @@ import numpy as np
 
 # Public API
 from pureml.machinery import Tensor
-from pureml.layers import Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, unfold1d, unfold2d
+from pureml.layers import Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, unfold1d, unfold2d
 from pureml.general_math import mean
 
 def _rng(seed=0):
@@ -129,6 +129,31 @@ def _manual_fold2d_grad(
                             w_idx = ow * sW + kw * dW
                             gpad[b, c, h_idx, w_idx] += upstream_grad[b, r, p]
     return gpad[:, :, pH:pH+H, pW:pW+W]
+
+class _ToyLayer(Layer):
+    def __init__(self):
+        super().__init__()
+        self.w = Tensor(np.ones((2,), dtype=np.float64), requires_grad=True)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return (self.w,)
+
+    def __call__(self, X: Tensor) -> Tensor:
+        return X
+
+
+class TestLayerBase(ut.TestCase):
+    def test_apply_state_rejects_partial_tunable_payload(self):
+        toy = _ToyLayer()
+        with self.assertRaises(ValueError):
+            toy.apply_state(tunable=(np.zeros((2,)), np.zeros((2,))))
+
+    def test_apply_state_skips_none_entries(self):
+        toy = _ToyLayer()
+        before = toy.w.data.copy()
+        toy.apply_state(tunable=(None,))
+        np.testing.assert_allclose(toy.w.data, before, rtol=0, atol=0)
 
 
 # --------------------------- Affine ---------------------------
@@ -353,6 +378,18 @@ class TestDropout(ut.TestCase):
         d.apply_state(buffers={"training": np.asarray(0, dtype=np.int8)})
         Y_eval = d(X)
         np.testing.assert_allclose(Y_eval.data, X.data, rtol=0, atol=0)
+
+    def test_dropout_grad_returns_none_for_mask_and_scale(self):
+        rng = _rng(99)
+        X = rng.standard_normal((4, 3))
+        mask = (rng.random((4, 3)) < 0.7).astype(np.float64)
+        scale = np.asarray(1.0 / 0.7, dtype=np.float64)
+        upstream = rng.standard_normal((4, 3))
+
+        gX, gmask, gscale = Dropout._dropout_grad(upstream, X, mask, scale)
+        np.testing.assert_allclose(gX, upstream * (mask * scale), rtol=1e-6, atol=1e-8)
+        self.assertIsNone(gmask)
+        self.assertIsNone(gscale)
 
 
 # --------------------------- BatchNorm1d ---------------------------

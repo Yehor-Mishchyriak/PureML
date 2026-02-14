@@ -91,7 +91,7 @@ def _mse_grad(upstream_grad: np.ndarray, Y: np.ndarray, Y_hat: np.ndarray, *, co
     return gY, gY_hat
 
 def MSE(Y: Tensor, Y_hat: Tensor) -> Tensor:
-    """Mean squared error (public wrapper).
+    """Mean squared error.
 
     Computes `mean((Y - Y_hat)^2)` over all elements.
 

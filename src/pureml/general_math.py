@@ -95,7 +95,7 @@ def _euclidean_distance_grad(
     return dL_dx, dL_dy
 
 def euclidean_distance(x: Tensor, y: Tensor) -> Tensor:
-    """Public API wrapper for Euclidean distance."""
+    """Compute Euclidean (L2) distance between two tensors."""
     _logger.debug("euclid API: Tensor x.shape=%s, y.shape=%s",
                   getattr(x, "shape", None), getattr(y, "shape", None))
     return TensorValuedFunction(_euclidean_distance, _euclidean_distance_grad)(x, y)
@@ -105,7 +105,13 @@ def euclidean_distance(x: Tensor, y: Tensor) -> Tensor:
 # *----------------------------------------------------------*
 
 def _mean(X: np.ndarray, *, context: dict | None = None, axis: int | None = None) -> np.ndarray:
-    """Mean over a chosen axis (default: last)."""
+    """Mean over a chosen axis.
+
+    Args:
+        X: Input array.
+        context: Optional node cache dict.
+        axis: Reduction axis. If ``None`` (default), reduce over all elements.
+    """
     _logger.debug("mean fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     out = np.mean(X, axis=axis)                                                           
     _update_ctx(context, axis=axis)
@@ -133,11 +139,20 @@ def _mean_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = No
     return (grad,)
 
 def mean(X: Tensor, *, axis: int | None = None) -> Tensor:
+    """Compute the mean of a tensor.
+
+    Args:
+        X: Input tensor.
+        axis: Reduction axis. If ``None`` (default), reduce over all elements.
+    """
     _logger.debug("mean API: Tensor X.shape=%s, axis=%s", getattr(X, "shape", None), axis)
     return TensorValuedFunction(_mean, _mean_grad)(X, axis=axis)
 
 def _deviation(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Deviation from the mean over a chosen axis: dev = X - mean(X, axis)."""
+    """Deviation from the mean over a chosen axis: ``dev = X - mean(X, axis)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("dev fwd: X.shape=%s, dtype=%s, axis=%s",
                   getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
@@ -158,12 +173,15 @@ def _deviation_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None
     return (out,)
 
 def deviation(X: Tensor, *, axis: int = -1) -> Tensor:
-    """Public API wrapper for deviation-from-mean."""
+    """Compute deviation from the mean along a chosen axis."""
     _logger.debug("dev API: Tensor X.shape=%s, axis=%s", getattr(X, "shape", None), axis)
     return TensorValuedFunction(_deviation, _deviation_grad)(X, axis=axis)
 
 def _variance(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Variance over a chosen axis: var = mean((X - mu)^2, axis)."""
+    """Variance over a chosen axis: ``var = mean((X - mu)^2, axis)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("var fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
     dev = X - mu
@@ -200,7 +218,10 @@ def variance(X: Tensor, *, axis: int = -1) -> Tensor:
     return TensorValuedFunction(_variance, _variance_grad)(X, axis=axis)
 
 def _std(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Standard deviation over a chosen axis: std = sqrt(var)."""
+    """Standard deviation over a chosen axis: ``std = sqrt(var)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("std fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
     dev = X - mu
@@ -240,7 +261,13 @@ def std(X: Tensor, *, axis: int = -1) -> Tensor:
     return TensorValuedFunction(_std, _std_grad)(X, axis=axis)
 
 def _sum(X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> np.ndarray:
-    """Sum over a chosen axis (default: last). If axis=None, sum over all elements."""
+    """Sum over a chosen axis.
+
+    Args:
+        X: Input array.
+        context: Optional node cache dict.
+        axis: Reduction axis. Defaults to last axis (``-1``). If ``None``, sum over all elements.
+    """
     _logger.debug("sum fwd: X.shape=%s, dtype=%s, axis=%s",
                   getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     out = np.sum(X, axis=axis)

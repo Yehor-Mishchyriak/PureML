@@ -208,6 +208,13 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Optional trainables `gamma`, `beta` (shape `(F,)`); optional buffers to resume `running_mean/variance`.  
   - Training uses batch stats and updates running; eval uses running only.
 
+- **LayerNorm1d(num_features, gamma=None, beta=None, eps=1e-5, bias=True, training=True)**  
+  - Normalizes across the **last axis** (feature axis), so input must end with `num_features` (e.g. `(B, F)` or `(B, T, F)`).  
+  - Per-sample normalization: computes mean/variance on the last axis only.  
+  - Affine parameters: learnable `gamma` and optional `beta` (both shape `(F,)`).  
+  - If `bias=False`, `beta` is disabled (not trainable and excluded from `.parameters`).  
+  - Buffers persist `eps` and `use_bias`; state loading restores both and validates parameter payloads.
+
 - **Embedding(V, D, pad_idx=None, method="xavier-glorot-normal", W=None, training=True, seed=None)**  
   - `V`: vocab size; `D`: embedding dim.  
   - `pad_idx`: optional int; that row is zeroed and receives no grad.  

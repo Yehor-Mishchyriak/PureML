@@ -4,7 +4,7 @@ import numpy as np
 
 # Public API
 from pureml.machinery import Tensor
-from pureml.layers import Affine, Dropout, BatchNorm1d, Embedding, unfold1d, unfold2d
+from pureml.layers import Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, unfold1d, unfold2d
 from pureml.general_math import mean
 
 def _rng(seed=0):
@@ -423,10 +423,213 @@ class TestBatchNorm1d(ut.TestCase):
         self.assertFalse(np.allclose(bn2.running_mean.data, rm_saved))
         self.assertFalse(np.allclose(bn2.running_variance.data, rv_saved))
 
-        # Restore via default Layer.apply_state (since BN exposes named_buffers Tensors)
+        # Restore running-stat buffers through BN's state loader
         bn2.apply_state(buffers={"running_mean": rm_saved, "running_variance": rv_saved})
         np.testing.assert_allclose(bn2.running_mean.data, rm_saved, rtol=0, atol=0)
         np.testing.assert_allclose(bn2.running_variance.data, rv_saved, rtol=0, atol=0)
+
+    def test_named_buffers_include_bn_metadata(self):
+        F = 5
+        bn = BatchNorm1d(F, eps=1e-4, momentum=0.25).eval()
+        bufs = bn.named_buffers()
+        self.assertIn("running_mean", bufs)
+        self.assertIn("running_variance", bufs)
+        self.assertIn("eps", bufs)
+        self.assertIn("momentum", bufs)
+        self.assertIn("training", bufs)
+        self.assertIn("num_features", bufs)
+        self.assertIsInstance(bufs["eps"], Tensor)
+        self.assertAlmostEqual(float(bufs["eps"].data), 1e-4, places=12)
+        self.assertAlmostEqual(float(np.asarray(bufs["momentum"]).item()), 0.25, places=12)
+        self.assertEqual(int(np.asarray(bufs["training"]).item()), 0)
+        self.assertEqual(int(np.asarray(bufs["num_features"]).item()), F)
+
+    def test_apply_state_restores_metadata_and_validates_num_features(self):
+        F = 4
+        bn = BatchNorm1d(F, eps=1e-5, momentum=0.1).train()
+        bn.apply_state(buffers={
+            "eps": np.asarray(1e-3, dtype=np.float64),
+            "momentum": np.asarray(0.33, dtype=np.float64),
+            "training": np.asarray(0, dtype=np.int8),
+            "num_features": np.asarray(F, dtype=np.int64),
+        })
+        self.assertAlmostEqual(float(bn.eps.data), 1e-3, places=12)
+        self.assertAlmostEqual(float(bn.momentum), 0.33, places=12)
+        self.assertFalse(bn.training)
+
+        with self.assertRaises(ValueError):
+            bn.apply_state(buffers={"num_features": np.asarray(F + 1, dtype=np.int64)})
+
+
+# --------------------------- LayerNorm1d ---------------------------
+class TestLayerNorm1d(ut.TestCase):
+    def test_forward_2d_matches_manual_formula(self):
+        B, F = 7, 5
+        rng = _rng(21)
+        X_np = rng.standard_normal((B, F))
+        X = Tensor(X_np, requires_grad=False)
+
+        ln = LayerNorm1d(F, eps=1e-5, bias=True)
+        Y = ln(X)
+
+        mu = X_np.mean(axis=-1, keepdims=True)
+        var = ((X_np - mu) ** 2).mean(axis=-1, keepdims=True)
+        expected = (X_np - mu) / np.sqrt(var + ln.eps.data)
+        expected = expected * ln.gamma.data + ln.beta.data
+
+        self.assertEqual(Y.data.shape, X_np.shape)
+        np.testing.assert_allclose(Y.data, expected, rtol=1e-6, atol=1e-8)
+
+    def test_forward_3d_normalizes_last_axis_per_sample(self):
+        B, T, F = 4, 3, 6
+        rng = _rng(22)
+        X_np = rng.standard_normal((B, T, F))
+        X = Tensor(X_np, requires_grad=False)
+        ln = LayerNorm1d(F, bias=False)
+
+        Y = ln(X).data
+        self.assertEqual(Y.shape, (B, T, F))
+
+        # bias=False and gamma initialized to ones -> pure normalized output
+        mu = Y.mean(axis=-1)
+        var = Y.var(axis=-1)
+        np.testing.assert_allclose(mu, np.zeros((B, T)), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(var, np.ones((B, T)), rtol=5e-5, atol=5e-5)
+
+    def test_affine_parameters_are_applied(self):
+        B, F = 5, 4
+        rng = _rng(23)
+        X_np = rng.standard_normal((B, F))
+        X = Tensor(X_np, requires_grad=False)
+
+        gamma = Tensor(np.array([2.0, 0.5, -1.0, 3.0]), requires_grad=True)
+        beta  = Tensor(np.array([0.1, -0.2, 0.3, 1.1]), requires_grad=True)
+        ln = LayerNorm1d(F, gamma=gamma, beta=beta, bias=True)
+        Y = ln(X).data
+
+        mu = X_np.mean(axis=-1, keepdims=True)
+        var = ((X_np - mu) ** 2).mean(axis=-1, keepdims=True)
+        xhat = (X_np - mu) / np.sqrt(var + ln.eps.data)
+        expected = xhat * gamma.data + beta.data
+        np.testing.assert_allclose(Y, expected, rtol=1e-6, atol=1e-8)
+
+    def test_bias_false_parameter_contract_and_forward(self):
+        B, F = 6, 3
+        rng = _rng(24)
+        X_np = rng.standard_normal((B, F))
+        X = Tensor(X_np, requires_grad=False)
+
+        ln = LayerNorm1d(F, bias=False)
+        self.assertFalse(ln.beta.requires_grad)
+        self.assertEqual(len(ln.parameters), 1)
+        self.assertIs(ln.parameters[0], ln.gamma)
+
+        Y = ln(X).data
+        mu = X_np.mean(axis=-1, keepdims=True)
+        var = ((X_np - mu) ** 2).mean(axis=-1, keepdims=True)
+        expected = (X_np - mu) / np.sqrt(var + ln.eps.data) * ln.gamma.data
+        np.testing.assert_allclose(Y, expected, rtol=1e-6, atol=1e-8)
+
+    def test_backward_shapes_and_bias_grad_behavior(self):
+        B, F = 8, 5
+        rng = _rng(25)
+        X = Tensor(rng.standard_normal((B, F)), requires_grad=True)
+
+        # bias=True -> gamma and beta both receive gradients
+        ln_b = LayerNorm1d(F, bias=True)
+        Yb = ln_b(X)
+        Lb = mean(Yb * Yb)
+        Lb.backward()
+        self.assertIsNotNone(X.grad)
+        self.assertEqual(X.grad.shape, X.shape)
+        self.assertIsNotNone(ln_b.gamma.grad)
+        self.assertIsNotNone(ln_b.beta.grad)
+
+        # bias=False -> beta should stay grad-free
+        X2 = Tensor(rng.standard_normal((B, F)), requires_grad=True)
+        ln_nb = LayerNorm1d(F, bias=False)
+        Yn = ln_nb(X2)
+        Ln = mean(Yn * Yn)
+        Ln.backward()
+        self.assertIsNotNone(ln_nb.gamma.grad)
+        self.assertIsNone(ln_nb.beta.grad)
+
+    def test_input_validation(self):
+        F = 4
+        ln = LayerNorm1d(F)
+
+        with self.assertRaises(TypeError):
+            _ = ln(np.zeros((2, F)))  # non-Tensor
+
+        with self.assertRaises(ValueError):
+            _ = ln(Tensor(np.array(1.0)))  # ndim == 0
+
+        with self.assertRaises(ValueError):
+            _ = ln(Tensor(np.zeros((3, F + 1))))  # wrong last dim
+
+    def test_ctor_validation(self):
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(0)
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(4, eps=0.0)
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(4, eps=-1e-5)
+
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(4, gamma=Tensor(np.zeros((5,))))
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(4, beta=Tensor(np.zeros((5,))))
+        with self.assertRaises(ValueError):
+            _ = LayerNorm1d(4, bias=False, beta=Tensor(np.zeros((4,))))
+
+    def test_mode_toggle_does_not_change_outputs(self):
+        B, F = 6, 4
+        rng = _rng(26)
+        X = Tensor(rng.standard_normal((B, F)), requires_grad=False)
+        ln = LayerNorm1d(F).train()
+        Y_train = ln(X).data.copy()
+        ln.eval()
+        Y_eval = ln(X).data.copy()
+        np.testing.assert_allclose(Y_train, Y_eval, rtol=1e-6, atol=1e-8)
+
+    def test_named_buffers_include_eps_and_use_bias(self):
+        ln = LayerNorm1d(3, bias=False, eps=1e-4)
+        bufs = ln.named_buffers()
+        self.assertIn("eps", bufs)
+        self.assertIn("use_bias", bufs)
+        self.assertIsInstance(bufs["eps"], Tensor)
+        self.assertFalse(bufs["use_bias"])
+        self.assertAlmostEqual(float(bufs["eps"].data), 1e-4, places=12)
+
+    def test_apply_state_restores_buffers_and_respects_bias_toggle(self):
+        F = 4
+        ln = LayerNorm1d(F, bias=True, eps=1e-5)
+
+        # turn bias off and restore eps through buffers
+        ln.apply_state(buffers={
+            "use_bias": np.asarray(0, dtype=np.int8),
+            "eps": np.asarray(1e-3, dtype=np.float64),
+        })
+        self.assertFalse(ln.use_bias)
+        self.assertFalse(ln.beta.requires_grad)
+        self.assertEqual(len(ln.parameters), 1)
+        self.assertAlmostEqual(float(ln.eps.data), 1e-3, places=12)
+
+        # bias=False -> only gamma may be supplied
+        gamma_new = _rng(120).standard_normal((F,))
+        ln.apply_state(tunable=(gamma_new,))
+        np.testing.assert_allclose(ln.gamma.data, gamma_new, rtol=0, atol=0)
+        with self.assertRaises(ValueError):
+            ln.apply_state(tunable=(gamma_new, np.zeros((F,))))
+
+        # turn bias on and load both gamma/beta
+        beta_new = _rng(121).standard_normal((F,))
+        ln.apply_state(buffers={"use_bias": np.asarray(1, dtype=np.int8)})
+        self.assertTrue(ln.use_bias)
+        self.assertTrue(ln.beta.requires_grad)
+        self.assertEqual(len(ln.parameters), 2)
+        ln.apply_state(tunable=(gamma_new, beta_new))
+        np.testing.assert_allclose(ln.beta.data, beta_new, rtol=0, atol=0)
 
 
 # --------------------------- Embedding ---------------------------

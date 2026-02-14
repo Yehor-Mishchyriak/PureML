@@ -45,7 +45,7 @@ The only runtime deps are: `numpy`, `zarr`
   - MeanPool2D: **IMPLEMENTATION PENDING**
   - MaxPool2D: **IMPLEMENTATION PENDING**
   - AdaPool2D: **IMPLEMENTATION PENDING**
-  - LayerNorm: **IMPLEMENTATION PENDING**
+  - LayerNorm1d: Added normalization over the last feature axis with learnable `gamma`/`beta`, optional bias, and full state persistence (`eps`/`use_bias`).
 - **Clear development protocols:**
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.
   - New validator functions used during development to aid codebase consistency.
@@ -60,6 +60,7 @@ The only runtime deps are: `numpy`, `zarr`
   - unfold2d: Added autograd-aware 2D unfolding (`(B, C, H, W) -> (B, C*kH*kW, H_out*W_out)`) with stride/padding/dilation and scatter-add backward.
 - **Miscellaneous:**
   - calculate_gain: **IMPLEMENTATION PENDING**
+  - BatchNorm1d state fix: checkpoints now persist and restore `eps`, `momentum`, `training`, and `num_features` (in addition to running stats), with validation on restore.
 
 ## v1.2.8 — What’s new
 - **Modernization of packaging and CI/CD, documentation and attribution fixes, and the addition of community guidelines.**

@@ -49,7 +49,7 @@ class KNN(BaseModel):
                 return lbl
 
     # ---------------------------------
-    # Public API
+    # Model methods
     # ---------------------------------
 
     def fit(self, X: Tensor, Y: Tensor) -> KNN:

@@ -687,17 +687,60 @@ class BatchNorm1d(Layer):
             tuple[Tensor, Tensor]: ``(gamma, beta)`` of shape ``(F,)`` each."""
         return (self.gamma, self.beta)
 
-    def named_buffers(self) -> dict[str, Tensor]:
-        """Return running statistics buffers.
+    def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        """Return BN buffers and persisted configuration/state metadata.
 
         Returns:
-            dict[str, Tensor]: A mapping with:
+            dict[str, Tensor | np.ndarray]: Mapping with:
                 - ``"running_mean"``: EMA of per-feature means, shape ``(F,)``
-                - ``"running_variance"``: EMA of per-feature variances, shape ``(F,)``."""
+                - ``"running_variance"``: EMA of per-feature variances, shape ``(F,)``
+                - ``"eps"``: numerical stability constant (scalar Tensor)
+                - ``"momentum"``: EMA coefficient as float64 scalar
+                - ``"training"``: mode flag as int8 scalar (1 train, 0 eval)
+                - ``"num_features"``: expected feature dimension as int64 scalar."""
         return {
             "running_mean": self.running_mean,
             "running_variance": self.running_variance,
+            "eps": self.eps,
+            "momentum": np.asarray(float(self.momentum), dtype=np.float64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+            "num_features": np.asarray(int(self.num_features), dtype=np.int64),
         }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Restore BN parameters and buffers from checkpoint payloads."""
+        self._validate_contract()
+
+        if buffers:
+            # Restore Tensor buffers first: running stats + eps
+            super().apply_state(tunable=(), buffers=buffers)
+
+            if "num_features" in buffers and buffers["num_features"] is not None:
+                loaded_f = int(np.asarray(buffers["num_features"]).item())
+                if loaded_f != self.num_features:
+                    raise ValueError(
+                        f"BatchNorm1d num_features mismatch: checkpoint={loaded_f}, layer={self.num_features}"
+                    )
+
+            if "momentum" in buffers and buffers["momentum"] is not None:
+                self.momentum = float(np.asarray(buffers["momentum"]).item())
+
+            if "training" in buffers and buffers["training"] is not None:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+
+        if tunable:
+            if len(tunable) != 2:
+                raise ValueError(f"BatchNorm1d.apply_state expected 2 arrays (gamma, beta); got {len(tunable)}")
+
+            gamma_arr = np.asarray(tunable[0])
+            beta_arr = np.asarray(tunable[1])
+            if gamma_arr.shape != self.gamma.data.shape:
+                raise ValueError(f"Incompatible gamma shape {gamma_arr.shape}; expected {self.gamma.data.shape}")
+            if beta_arr.shape != self.beta.data.shape:
+                raise ValueError(f"Incompatible beta shape {beta_arr.shape}; expected {self.beta.data.shape}")
+
+            self.gamma.data = gamma_arr.astype(self.gamma.data.dtype, copy=False)
+            self.beta.data = beta_arr.astype(self.beta.data.dtype, copy=False)
 
     def __call__(self, X: Tensor) -> Tensor:
         """Apply BN over the batch axis for (B, F) input.

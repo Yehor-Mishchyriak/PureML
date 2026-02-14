@@ -779,8 +779,122 @@ class BatchNorm1d(Layer):
         _logger.debug("BN1d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
-class LayerNorm(Layer):
-    pass
+class LayerNorm1d(Layer):
+
+    def __init__(self,
+                num_features: int,
+                *,
+                gamma: Tensor | None = None,
+                beta: Tensor | None = None,
+                eps: float = 1e-5,
+                bias: bool = True,
+                training: bool = True):
+        
+        super().__init__(training=training)
+
+        if num_features <= 0:
+            raise ValueError(f"num_features must be > 0, got {num_features}")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be > 0, got {eps}")
+
+        self.num_features = int(num_features)
+        self.use_bias = bool(bias)
+
+        if gamma is None:
+            self.gamma = Tensor(np.ones((self.num_features,), dtype=np.float64), requires_grad=True)
+        else:
+            if gamma.shape != (self.num_features,):
+                raise ValueError(f"Incompatible gamma shape {gamma.shape}; expected {(self.num_features,)}")
+            self.gamma = gamma
+            self.gamma.requires_grad = True
+
+        if not self.use_bias:
+            if beta is not None:
+                raise ValueError("Received 'beta' but bias=False. Either pass bias=True or drop 'beta'.")
+            self.beta = Tensor(np.zeros((self.num_features,), dtype=self.gamma.dtype), requires_grad=False)
+        else:
+            if beta is None:
+                self.beta = Tensor(np.zeros((self.num_features,), dtype=np.float64), requires_grad=True)
+            else:
+                if beta.shape != (self.num_features,):
+                    raise ValueError(f"Incompatible beta shape {beta.shape}; expected {(self.num_features,)}")
+                self.beta = beta
+                self.beta.requires_grad = True
+
+        self.eps = Tensor(eps, requires_grad=False)
+        _logger.debug(
+            "LayerNorm1d initialized: num_features=%d, eps=%g, use_bias=%s, gamma.shape=%s, beta.shape=%s req_grad_beta=%s",
+            self.num_features, float(eps), self.use_bias,
+            getattr(self.gamma, "shape", None), getattr(self.beta, "shape", None), getattr(self.beta, "requires_grad", None)
+        )
+
+    def on_mode_change(self, training: bool):
+        _logger.debug("LayerNorm1d mode changed: training=%s", bool(training))
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return (self.gamma, self.beta) if self.use_bias else (self.gamma,)
+
+    def named_buffers(self) -> dict[str, Tensor | bool]:
+        return {
+            "eps": self.eps,
+            "use_bias": self.use_bias
+        }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        self._validate_contract()
+
+        if buffers:
+            # Delegate Tensor buffer restore (eps) to base implementation.
+            super().apply_state(tunable=(), buffers=buffers)
+            if "use_bias" in buffers and buffers["use_bias"] is not None:
+                prev = self.use_bias
+                self.use_bias = bool(int(np.asarray(buffers["use_bias"]).item()))
+                if not self.use_bias:
+                    self.beta.data[...] = 0.0
+                    self.beta.requires_grad = False
+                elif not prev:
+                    self.beta.requires_grad = True
+
+        if tunable:
+            expected = 2 if self.use_bias else 1
+            if len(tunable) != expected:
+                raise ValueError(
+                    f"LayerNorm1d.apply_state expected {expected} arrays "
+                    f"(gamma{', beta' if self.use_bias else ''}); got {len(tunable)}"
+                )
+
+            gamma_arr = np.asarray(tunable[0])
+            if gamma_arr.shape != self.gamma.data.shape:
+                raise ValueError(f"Incompatible gamma shape {gamma_arr.shape}; expected {self.gamma.data.shape}")
+            self.gamma.data = gamma_arr.astype(self.gamma.data.dtype, copy=False)
+
+            if self.use_bias:
+                beta_arr = np.asarray(tunable[1])
+                if beta_arr.shape != self.beta.data.shape:
+                    raise ValueError(f"Incompatible beta shape {beta_arr.shape}; expected {self.beta.data.shape}")
+                self.beta.data = beta_arr.astype(self.beta.data.dtype, copy=False)
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if not isinstance(X, Tensor):
+            raise TypeError(f"LayerNorm1d expects a Tensor, got {type(X)}")
+        if X.ndim < 1:
+            raise ValueError(f"LayerNorm1d expects input with at least 1 dimension, got shape {X.shape}")
+        if X.shape[-1] != self.num_features:
+            raise ValueError(
+                f"LayerNorm1d expects last dimension == num_features ({self.num_features}), got {X.shape}"
+            )
+
+        _logger.debug("LayerNorm1d __call__: training=%s, X.shape=%s", self.training, X.shape)
+        mu = general_math.mean(X, axis=-1).unsqueeze(-1) # [a, b, ..., y, z] -> [a, b, ..., y, 1]
+        sig2 = general_math.variance(X, axis=-1).unsqueeze(-1) # [a, b, ..., y, z] -> [a, b, ..., y, 1]
+        X_hat = (X - mu) / sqrt(sig2+self.eps)
+        if self.use_bias:
+            out = self.gamma * X_hat + self.beta
+        else:
+            out = self.gamma * X_hat
+        _logger.debug("LayerNorm1d __call__: out.shape=%s", getattr(out, "shape", None))
+        return out
 
 class Embedding(Layer):
     """Learned lookup table: returns rows of `W` for integer indices.
@@ -1015,8 +1129,6 @@ class Embedding(Layer):
 
 def _L_out(L_in: int, p: int, d: int, kL: int, s: int) -> int:
     return floor((L_in + 2*p - d*(kL - 1) - 1) / s) + 1
-
-# *----------------------------------------------------*
 
 def _unfold2d(
         X: np.ndarray, # (B, C, H, W)

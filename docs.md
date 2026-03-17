@@ -161,12 +161,11 @@ out.backward()
 
 - `sigmoid(x: Tensor)`  
 - `relu(x: Tensor)`  
+- `leaky_relu(x: Tensor, negative_slope=0.01)`  
 - `tanh(x: Tensor)`  
 - `softmax(x: Tensor, axis=-1)` - stable, axis-aware  
 - `log_softmax(x: Tensor, axis=-1)` - stable, axis-aware  
 All accept any shape; `axis` is the class dimension for softmax/log_softmax. Return Tensors and provide Jacobian-free backward passes.
-
-Each returns a Tensor and has a Jacobian-free backward pass.
 
 ---
 

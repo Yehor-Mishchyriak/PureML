@@ -51,6 +51,9 @@ The only runtime deps are: `numpy`, `zarr`
   - New validator functions used during development to aid codebase consistency.
 - **New weight initialization:**
   - Kaiming normal initialization: **IMPLEMENTATION PENDING**
+- **New activations:**
+  - leaky_relu: Added elementwise LeakyReLU with configurable `negative_slope` (default `0.01`).
+  - prelu: **IMPLEMENTATION PENDING**
 - **Additional Tensor operations:**
   - Tensor.dot: Added a shape-validated dot op with explicit VJPs for `1D·1D` and `2D·2D` cases (mixed-rank and invalid-shape inputs raise clear errors).
   - Tensor.general_transpose: Added N-D axis permutation with backward support via cached inverse permutation.

@@ -19,7 +19,7 @@ from .machinery import Tensor, TensorValuedFunction, _shape_safe_grad, _update_c
 _logger = logging.getLogger(__name__)
 
 # *----------------------------------------------------*
-#                Elementwise activations
+#         Elementwise activations (non-parametric)
 # *----------------------------------------------------*
 
 def _sigmoid(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:
@@ -66,6 +66,40 @@ def _relu_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None
         mask = (x > 0).astype(x.dtype)
     grad = upstream_grad * mask
     _logger.debug("relu bwd: grad.shape=%s", getattr(grad, "shape", None))
+    return (grad,)
+
+def _leaky_relu(x: np.ndarray, *, negative_slope: float, context: dict | None = None) -> np.ndarray:
+    """Elementwise LeakyReLU: ``max(0, x) + negative_slope * min(0, x)``."""
+    _logger.debug(
+        "leaky_relu fwd: x.shape=%s, dtype=%s, negative_slope=%s",
+        getattr(x, "shape", None), getattr(x, "dtype", None), float(negative_slope)
+    )
+    mask = x > 0
+    _update_ctx(ctx=context, negative_slope=negative_slope, mask=mask)
+    out = np.maximum(0, x) + negative_slope * np.minimum(0, x)
+    _logger.debug("leaky_relu fwd: out.shape=%s", getattr(out, "shape", None))
+    return out
+
+@_shape_safe_grad
+def _leaky_relu_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None = None):
+    """VJP for LeakyReLU: ``up * (1 if x>0 else negative_slope)``."""
+    _logger.debug(
+        "leaky_relu bwd: up.shape=%s, x.shape=%s",
+        getattr(upstream_grad, "shape", None), getattr(x, "shape", None)
+    )
+    if context is None:
+        raise RuntimeError(
+            "leaky_relu backward requires forward context with 'mask' and 'negative_slope'. "
+            "Call it through TensorValuedFunction in a standard forward pass."
+        )
+    mask = context.get("mask")
+    negative_slope = context.get("negative_slope")
+    if mask is None or negative_slope is None:
+        raise RuntimeError(
+            "leaky_relu backward is missing cached values in context: expected 'mask' and 'negative_slope'."
+        )
+    grad = upstream_grad * (mask + negative_slope*~mask)
+    _logger.debug("leaky_relu bwd: grad.shape=%s", getattr(grad, "shape", None))
     return (grad,)
 
 def _tanh(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:
@@ -175,6 +209,29 @@ def sigmoid(x: Tensor) -> Tensor:
 
 def relu(x: Tensor) -> Tensor:
     return TensorValuedFunction(_relu, _relu_grad)(x)
+
+def leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
+    """Apply LeakyReLU activation elementwise.
+
+    Computes:
+        ``f(x) = max(0, x) + negative_slope * min(0, x)``
+
+    This keeps a small non-zero gradient on negative inputs and therefore avoids
+    fully "dead" units that plain ReLU can produce.
+
+    Args:
+        x: Input tensor of any shape.
+        negative_slope: Slope used for ``x <= 0`` values. Typical defaults are
+            small positive values such as ``0.01``.
+
+    Returns:
+        Tensor: Output tensor with the same shape as ``x``.
+
+    Notes:
+        At ``x == 0``, this implementation follows the negative branch in backward,
+        so the local gradient is ``negative_slope``.
+    """
+    return TensorValuedFunction(_leaky_relu, _leaky_relu_grad)(x, negative_slope=negative_slope)
 
 def tanh(x: Tensor) -> Tensor:
     return TensorValuedFunction(_tanh, _tanh_grad)(x)

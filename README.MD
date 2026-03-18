@@ -50,7 +50,7 @@ The only runtime deps are: `numpy`, `zarr`
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.
   - New validator functions used during development to aid codebase consistency.
 - **New weight initialization:**
-  - Kaiming normal initialization: **IMPLEMENTATION PENDING**
+  - Kaiming normal initialization: Added fan-in He initialization with nonlinearity-aware gain (`relu`, `leaky_relu`, etc.) and enabled it in `Affine` via `method="kaiming-normal"`.
 - **New activations:**
   - leaky_relu: Added elementwise LeakyReLU with configurable `negative_slope` (default `0.01`).
   - prelu: **IMPLEMENTATION PENDING**
@@ -62,7 +62,7 @@ The only runtime deps are: `numpy`, `zarr`
   - unfold1d: Added autograd-aware 1D unfolding (`(B, C, L) -> (B, C*kL, L_out)`) with stride/padding/dilation and scatter-add backward.
   - unfold2d: Added autograd-aware 2D unfolding (`(B, C, H, W) -> (B, C*kH*kW, H_out*W_out)`) with stride/padding/dilation and scatter-add backward.
 - **Miscellaneous:**
-  - calculate_gain: **IMPLEMENTATION PENDING**
+  - calculate_gain: Added recommended gain computation for `Affine`/`Conv1D`/`Conv2D`, `sigmoid`, `tanh`, `relu`, and `leaky_relu` (with configurable negative slope).
   - BatchNorm1d state fix: checkpoints now persist and restore `eps`, `momentum`, `training`, and `num_features` (in addition to running stats), with validation on restore.
 
 ## v1.2.8 — What’s new

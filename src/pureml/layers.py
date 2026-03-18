@@ -23,6 +23,7 @@ import numpy as np
 # built-in
 from abc import ABC, abstractmethod
 from math import floor
+from math import sqrt as m_sqrt
 import logging
 from typing import Literal
 # local
@@ -73,10 +74,6 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
-# REFERENCE: https://docs.pytorch.org/docs/stable/nn.init.html
-#                         | | |  (see: torch.nn.init.kaiming_normal_, and
-#                         V V V        torch.nn.init.calculate_gain)
-
 def calculate_gain(
         nonlinearity: Literal[
                         'Affine',
@@ -86,19 +83,57 @@ def calculate_gain(
                         "tanh",
                         "relu",
                         "leaky_relu"],
-        param:        int | float | None):
-    raise NotImplementedError("The recommended gain value computation function has not yet been implemented")
+        param: int | float | None):
+    """Return the recommended gain for weight initialization.
+
+    This mirrors the common gain values used with Xavier/He-style initializers.
+
+    Args:
+        nonlinearity: Name of the activation/layer family. Supported values:
+            ``"Affine"``, ``"Conv1D"``, ``"Conv2D"``, ``"sigmoid"``,
+            ``"tanh"``, ``"relu"``, ``"leaky_relu"``.
+        param: Optional activation parameter. Used only for ``"leaky_relu"``
+            as the negative slope. If ``None``, defaults to ``0.01``.
+
+    Returns:
+        float: Recommended gain multiplier for the specified nonlinearity.
+
+    Raises:
+        ValueError: If ``nonlinearity`` is unsupported.
+    """
+    _logger.debug("calculate_gain: nonlinearity=%s, param=%s", nonlinearity, param)
+
+    if nonlinearity in {"Affine", "Conv1D", "Conv2D", "sigmoid"}:
+        gain = 1.0
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "tanh":
+        gain = 5.0 / 3.0
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "relu":
+        gain = m_sqrt(2.0)
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "leaky_relu":
+        negative_slope = 0.01 if param is None else float(param)
+        gain = m_sqrt(2.0 / (1.0 + negative_slope ** 2))
+        _logger.debug("calculate_gain: negative_slope=%s, gain=%s", negative_slope, gain)
+        return gain
+
+    _logger.error("calculate_gain: unsupported nonlinearity=%s", nonlinearity)
+    raise ValueError(f"Unsupported nonlinearity: {nonlinearity}")
 
 def kaiming_normal(
     fan_in: int,
-    fan_out: int,
     nonlinearity: str,
-    mode: Literal["fan_in", "fan_out"] = "fan_in",
     *,
     rng: np.random.Generator | None = None
 ) -> tuple[Tensor, Tensor]:
-    # The method is described in Delving deep into rectifiers: Surpassing human-level performance on ImageNet classification - He, K. et al. (2015).
-    raise NotImplementedError("The kaiming_normal initialization has not yet been implemented")
+    pass
 
 # *----------------------------------------------------*
 

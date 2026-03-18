@@ -129,11 +129,77 @@ def calculate_gain(
 
 def kaiming_normal(
     fan_in: int,
-    nonlinearity: str,
+    fan_out: int,
+    nonlinearity: Literal[
+        'Affine',
+        'Conv1D',
+        'Conv2D',
+        "sigmoid",
+        "tanh",
+        "relu",
+        "leaky_relu"
+    ] = "relu",
     *,
-    rng: np.random.Generator | None = None
+    param: int | float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
-    pass
+    """Initialize weights and bias using Kaiming/He normal (fan-in mode).
+
+    The sampled weight variance is:
+        ``Var(W) = gain^2 / fan_in``
+    where ``gain`` depends on ``nonlinearity`` via :func:`calculate_gain`.
+
+    Args:
+        fan_in: Number of input features (> 0).
+        fan_out: Number of output features (> 0).
+        nonlinearity: Nonlinearity name used to choose the recommended gain.
+            Supported values are the same as for :func:`calculate_gain`.
+        param: Optional parameter passed to :func:`calculate_gain`. Used for
+            ``"leaky_relu"`` as the negative slope (default ``0.01`` when None).
+        rng: Optional NumPy random generator. If omitted, a fresh
+            ``np.random.default_rng()`` is used.
+
+    Returns:
+        tuple[Tensor, Tensor]:
+            - ``W`` with shape ``(fan_out, fan_in)``, ``requires_grad=True``
+            - ``b`` with shape ``(fan_out,)``, ``requires_grad=True``
+
+    Raises:
+        ValueError: If ``fan_in``/``fan_out`` are non-positive, or if ``param``
+            is non-finite.
+        TypeError: If ``param`` is not numeric when provided.
+    """
+    _logger.debug(
+        "kaiming_normal: fan_in=%s, fan_out=%s, nonlinearity=%s, param=%s, rng_provided=%s",
+        fan_in, fan_out, nonlinearity, param, rng is not None
+    )
+
+    if fan_in <= 0 or fan_out <= 0:
+        _logger.error("kaiming_normal: invalid fan dims fan_in=%s fan_out=%s", fan_in, fan_out)
+        raise ValueError(f"fan_in and fan_out must be > 0 (got {fan_in=}, {fan_out=})")
+
+    if param is not None:
+        if isinstance(param, bool) or not isinstance(param, (int, float, np.integer, np.floating)):
+            _logger.error("kaiming_normal: invalid param type=%s", type(param).__name__)
+            raise TypeError(f"param must be numeric or None, got {type(param).__name__}")
+        param = float(param)
+        if not np.isfinite(param):
+            _logger.error("kaiming_normal: non-finite param=%s", param)
+            raise ValueError(f"param must be finite, got {param}")
+
+    gen = rng or np.random.default_rng()
+    gain = calculate_gain(nonlinearity, param)
+    std = gain / m_sqrt(float(fan_in))
+
+    W = gen.normal(0.0, std, size=(fan_out, fan_in))
+    b = np.zeros((fan_out,))
+
+    _logger.debug(
+        "kaiming_normal: gain=%s, std=%s, W.shape=%s, b.shape=%s",
+        gain, std, W.shape, b.shape
+    )
+
+    return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
 # *----------------------------------------------------*
 
@@ -229,7 +295,8 @@ class Affine(Layer):
     Args:
         fan_in (int): Input feature dimension `n`.
         fan_out (int): Output feature dimension `m`.
-        method (str, optional): Initialization method. Supported: `"xavier-glorot-normal"`.
+        method (str, optional): Initialization method. Supported:
+            `"xavier-glorot-normal"`, `"kaiming-normal"`.
             Defaults to `"xavier-glorot-normal"`.
         W (Tensor | None): Optional pre-initialized weight tensor. May be shaped
             `(fan_in, fan_out)` or `(fan_out, fan_in)`; it will be converted to internal
@@ -249,7 +316,7 @@ class Affine(Layer):
     def __init__(self,
                  fan_in: int,
                  fan_out: int, 
-                 method: Literal["xavier-glorot-normal"] = "xavier-glorot-normal",
+                 method: Literal["xavier-glorot-normal", "kaiming-normal"] = "xavier-glorot-normal",
                  W: Tensor | None = None, 
                  b: Tensor | None = None,
                  *,
@@ -262,7 +329,10 @@ class Affine(Layer):
         self.use_bias = bool(bias)
 
         try:
-            init_fn = {"xavier-glorot-normal": xavier_glorot_normal}[method]
+            init_fn = {
+                "xavier-glorot-normal": xavier_glorot_normal,
+                "kaiming-normal": lambda fi, fo, *, rng=None: kaiming_normal(fi, fo, nonlinearity="relu", rng=rng),
+            }[method]
         except KeyError as e:
             raise ValueError(f"Unknown init method '{method}'") from e
 

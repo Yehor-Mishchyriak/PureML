@@ -190,10 +190,12 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
 
 - **Affine(fan_in, fan_out, method="xavier-glorot-normal", W=None, b=None, bias=True, seed=None)**  
   - Linear map `Y = X @ W + b`.  
+  - `method`: `"xavier-glorot-normal"` or `"kaiming-normal"`.
   - `W`: optional Tensor shaped `(fan_in, fan_out)` or `(fan_out, fan_in)` (auto-transposed).  
   - `b`: optional Tensor `(fan_out,)`; ignored when `bias=False`.  
   - Seeds init via `seed`; buffers persist `method`, `seed`, `use_bias`.  
   - Gradients are always tracked for supplied `W`/`b`.
+  - Practical tip: use `"kaiming-normal"` for ReLU/LeakyReLU-heavy MLPs; use Xavier as a general default.
 
 - **Dropout(p=0.5, seed=None, training=True)**  
   - Inverted dropout for 1D/2D inputs.  
@@ -220,7 +222,10 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - `W`: optional Tensor `(V, D)` init; else Xavier/Glorot with `seed`.  
   - Gradients accumulate correctly for repeated indices. Buffers persist `padding_idx`, `seed`, `method`.
 
-- **Initializer**: `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
+- **Initializers**:
+  - `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
+  - `kaiming_normal(fan_in, fan_out, nonlinearity="relu", param=None, rng=None)` -> `(W, b)` tensors with `requires_grad=True` (fan-in mode).
+  - `calculate_gain(nonlinearity, param=None)` -> recommended gain scalar for supported nonlinearities (useful when choosing initialization for your activation stack).
 
 ### Unfold helpers
 

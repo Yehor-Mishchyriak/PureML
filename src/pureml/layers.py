@@ -1704,6 +1704,17 @@ def unfold1d(X: Tensor,
 # *----------------------------------------------------*
 
 class Conv2D(Layer):
+    """2D convolution layer built on top of ``unfold2d`` + matrix multiplication.
+
+    The layer expects input shaped ``(B, C, H, W)`` and returns
+    ``(B, out_channels, H_out, W_out)`` where output spatial sizes follow the
+    standard convolution formula using ``kernel_size``, ``stride``, ``padding``,
+    and ``dilation``.
+
+    Weights are stored in flattened im2col form:
+    ``W.shape == (out_channels, in_channels * kH * kW)``.
+    """
+
     def __init__(
         self,
         in_channels: int,
@@ -1721,6 +1732,27 @@ class Conv2D(Layer):
         nonlinearity: _nonlinearity_types = "relu",
         training: bool = True,
         seed: int | None = None):
+        """Initialize a Conv2D layer.
+
+        Args:
+            in_channels: Number of input channels.
+            out_channels: Number of output channels (number of kernels).
+            kernel_size: Kernel size as int or ``(kH, kW)``.
+            stride: Stride as int or ``(sH, sW)``.
+            padding: Symmetric padding as int or ``(pH, pW)``.
+            dilation: Dilation as int or ``(dH, dW)``.
+            use_bias: Whether to include learnable bias terms.
+            pad_with: Constant value used when padding inputs before unfold.
+            W: Optional pre-initialized weight tensor. Accepted shapes:
+                ``(out_channels, in_channels*kH*kW)`` or transposed
+                ``(in_channels*kH*kW, out_channels)``.
+            b: Optional pre-initialized bias tensor of shape ``(out_channels,)``.
+            method: Initialization method name.
+            nonlinearity: Nonlinearity hint used by some initializers
+                (e.g., Kaiming gain).
+            training: Initial mode flag.
+            seed: Optional RNG seed used for initialization.
+        """
 
         super().__init__(training=training)
 
@@ -1779,20 +1811,33 @@ class Conv2D(Layer):
                     raise ValueError(f"Incompatible b shape {b.shape}; expected {(out_channels,)}")
                 self.b = b
             self.b.requires_grad = True
+
+        _logger.debug(
+            "Conv2D initialized: seed=%s, method=%s, nonlinearity=%s, in_channels=%d, "
+            "out_channels=%d, kernel_size=%s, stride=%s, padding=%s, dilation=%s, "
+            "use_bias=%s, W.shape=%s, b.shape=%s",
+            self.seed, self.method, self.nonlinearity,
+            self.in_channels, self.out_channels,
+            self.kernel_size, self.stride, self.padding, self.dilation,
+            self.use_bias, getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
     
     @staticmethod
     def _pair(v: int | tuple[int, int]):
+        """Normalize an int or pair into a 2-tuple."""
         if isinstance(v, int):
             return (v, v)
         return v
 
     @property
     def parameters(self) -> tuple[Tensor, ...]:
+        """Return trainable parameters in layer order."""
         if self.use_bias:
             return (self.W, self.b)
         return (self.W,)
 
     def named_buffers(self) -> dict[str, np.ndarray]:
+        """Return non-trainable metadata required for checkpointing."""
         seed_val = 0 if self.seed is None else self.seed
         return {
             "method": np.array(self.method.encode("utf-8"), dtype=np.bytes_),
@@ -1810,6 +1855,11 @@ class Conv2D(Layer):
         }
 
     def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Load trainable tensors and persisted metadata into this layer."""
+        _logger.debug(
+            "Conv2D.apply_state called: n_tunable=%d, has_buffers=%s",
+            len(tunable) if tunable else 0, buffers is not None
+        )
         self._validate_contract()
 
         if buffers:
@@ -1894,8 +1944,16 @@ class Conv2D(Layer):
                 if b_arr.shape != self.b.data.shape:
                     raise ValueError(f"Incompatible b shape {b_arr.shape}; expected {self.b.data.shape}")
                 self.b.data = b_arr.astype(self.b.data.dtype, copy=False)
+
+        _logger.debug(
+            "Conv2D.apply_state complete: method=%s, nonlinearity=%s, use_bias=%s, "
+            "W.shape=%s, b.shape=%s",
+            self.method, self.nonlinearity, self.use_bias,
+            getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
     
     def __call__(self, X: Tensor) -> Tensor:
+        """Apply Conv2D to an input tensor ``(B, C, H, W)``."""
         if X.ndim != 4:
             raise ValueError(f"Conv2D expects input of shape (B, C, H, W), got {X.shape}")
 
@@ -1911,11 +1969,18 @@ class Conv2D(Layer):
         pH, pW = self.padding
         H_out = _L_out(H, pH, dH, kH, sH)
         W_out = _L_out(W, pW, dW, kW, sW)
+        _logger.debug(
+            "Conv2D forward: X.shape=%s, W.shape=%s, b.shape=%s, kernel_size=%s, "
+            "stride=%s, padding=%s, dilation=%s, H_out=%d, W_out=%d",
+            X.shape, self.W.shape, getattr(self.b, "shape", None),
+            self.kernel_size, self.stride, self.padding, self.dilation, H_out, W_out
+        )
         cols = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
         Z = (self.W @ cols)
         if self.use_bias:
             Z += self.b.unsqueeze(1)
         Z = Z.reshape(B, self.out_channels, H_out, W_out)
+        _logger.debug("Conv2D forward: out.shape=%s", getattr(Z, "shape", None))
         return Z
 
 class Conv1D(Layer):

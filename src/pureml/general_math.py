@@ -79,7 +79,7 @@ def _euclidean_distance_grad(
                   getattr(upstream_grad, "shape", None),
                   getattr(x, "shape", None), getattr(y, "shape", None))
 
-    ctx = context or {}
+    ctx = context if context is not None else {}
     diff = ctx.get("diff", x - y)
     d = ctx.get("out", np.sqrt(np.sum(diff * diff)))
 
@@ -95,7 +95,7 @@ def _euclidean_distance_grad(
     return dL_dx, dL_dy
 
 def euclidean_distance(x: Tensor, y: Tensor) -> Tensor:
-    """Public API wrapper for Euclidean distance."""
+    """Compute Euclidean (L2) distance between two tensors."""
     _logger.debug("euclid API: Tensor x.shape=%s, y.shape=%s",
                   getattr(x, "shape", None), getattr(y, "shape", None))
     return TensorValuedFunction(_euclidean_distance, _euclidean_distance_grad)(x, y)
@@ -105,7 +105,13 @@ def euclidean_distance(x: Tensor, y: Tensor) -> Tensor:
 # *----------------------------------------------------------*
 
 def _mean(X: np.ndarray, *, context: dict | None = None, axis: int | None = None) -> np.ndarray:
-    """Mean over a chosen axis (default: last)."""
+    """Mean over a chosen axis.
+
+    Args:
+        X: Input array.
+        context: Optional node cache dict.
+        axis: Reduction axis. If ``None`` (default), reduce over all elements.
+    """
     _logger.debug("mean fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     out = np.mean(X, axis=axis)                                                           
     _update_ctx(context, axis=axis)
@@ -115,7 +121,7 @@ def _mean(X: np.ndarray, *, context: dict | None = None, axis: int | None = None
 @_shape_safe_grad
 def _mean_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = None) -> tuple[np.ndarray]:
     """VJP for mean over a chosen axis."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     if ax is None:
         N = X.size if X.size else 1
         grad = np.broadcast_to(upstream / N, X.shape)
@@ -133,11 +139,20 @@ def _mean_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = No
     return (grad,)
 
 def mean(X: Tensor, *, axis: int | None = None) -> Tensor:
+    """Compute the mean of a tensor.
+
+    Args:
+        X: Input tensor.
+        axis: Reduction axis. If ``None`` (default), reduce over all elements.
+    """
     _logger.debug("mean API: Tensor X.shape=%s, axis=%s", getattr(X, "shape", None), axis)
     return TensorValuedFunction(_mean, _mean_grad)(X, axis=axis)
 
 def _deviation(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Deviation from the mean over a chosen axis: dev = X - mean(X, axis)."""
+    """Deviation from the mean over a chosen axis: ``dev = X - mean(X, axis)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("dev fwd: X.shape=%s, dtype=%s, axis=%s",
                   getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
@@ -149,7 +164,7 @@ def _deviation(X: np.ndarray, *, context: dict | None = None, axis: int = -1) ->
 @_shape_safe_grad
 def _deviation_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for deviation: upstream - mean(upstream, axis)."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     _logger.debug("dev bwd: up.shape=%s, X.shape=%s, axis=%s",
                   getattr(upstream, "shape", None), getattr(X, "shape", None), ax)
     mean_up = np.mean(upstream, axis=ax, keepdims=True)
@@ -158,12 +173,15 @@ def _deviation_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None
     return (out,)
 
 def deviation(X: Tensor, *, axis: int = -1) -> Tensor:
-    """Public API wrapper for deviation-from-mean."""
+    """Compute deviation from the mean along a chosen axis."""
     _logger.debug("dev API: Tensor X.shape=%s, axis=%s", getattr(X, "shape", None), axis)
     return TensorValuedFunction(_deviation, _deviation_grad)(X, axis=axis)
 
 def _variance(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Variance over a chosen axis: var = mean((X - mu)^2, axis)."""
+    """Variance over a chosen axis: ``var = mean((X - mu)^2, axis)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("var fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
     dev = X - mu
@@ -175,7 +193,7 @@ def _variance(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> 
 @_shape_safe_grad
 def _variance_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for variance over a chosen axis."""
-    ctx = context or {}
+    ctx = context if context is not None else {}
     ax = ctx.get("axis", axis)
     if ax is None:
         _logger.debug("var bwd: up.shape=%s, X.shape=%s, axis=%s (None->all)",
@@ -200,7 +218,10 @@ def variance(X: Tensor, *, axis: int = -1) -> Tensor:
     return TensorValuedFunction(_variance, _variance_grad)(X, axis=axis)
 
 def _std(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.ndarray:
-    """Standard deviation over a chosen axis: std = sqrt(var)."""
+    """Standard deviation over a chosen axis: ``std = sqrt(var)``.
+
+    Default reduction axis is the last axis (``axis=-1``).
+    """
     _logger.debug("std fwd: X.shape=%s, dtype=%s, axis=%s", getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     mu = np.mean(X, axis=axis, keepdims=True)
     dev = X - mu
@@ -213,7 +234,7 @@ def _std(X: np.ndarray, *, context: dict | None = None, axis: int = -1) -> np.nd
 @_shape_safe_grad
 def _std_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for standard deviation over a chosen axis: d std / dX = dev / (N * std)."""
-    ctx = context or {}
+    ctx = context if context is not None else {}
     ax = ctx.get("axis", axis)
     if ax is None:
         _logger.debug("std bwd: up.shape=%s, X.shape=%s, axis=%s (None->all)",
@@ -240,7 +261,13 @@ def std(X: Tensor, *, axis: int = -1) -> Tensor:
     return TensorValuedFunction(_std, _std_grad)(X, axis=axis)
 
 def _sum(X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> np.ndarray:
-    """Sum over a chosen axis (default: last). If axis=None, sum over all elements."""
+    """Sum over a chosen axis.
+
+    Args:
+        X: Input array.
+        context: Optional node cache dict.
+        axis: Reduction axis. Defaults to last axis (``-1``). If ``None``, sum over all elements.
+    """
     _logger.debug("sum fwd: X.shape=%s, dtype=%s, axis=%s",
                   getattr(X, "shape", None), getattr(X, "dtype", None), axis)
     out = np.sum(X, axis=axis)
@@ -251,7 +278,7 @@ def _sum(X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -
 @_shape_safe_grad
 def _sum_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None, axis: int | None = -1) -> tuple[np.ndarray]:
     """VJP for sum: broadcast upstream back over the reduced axis/axes."""
-    ax = (context or {}).get("axis", axis)
+    ax = (context if context is not None else {}).get("axis", axis)
     if ax is None:
         up = upstream  # scalar or already broadcastable
     else:

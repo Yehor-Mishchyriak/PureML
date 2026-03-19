@@ -83,7 +83,7 @@ def _mse_grad(upstream_grad: np.ndarray, Y: np.ndarray, Y_hat: np.ndarray, *, co
     """
     _logger.debug("MSE bwd: up.shape=%s, Y.shape=%s, Y_hat.shape=%s",
                   getattr(upstream_grad, "shape", None), getattr(Y, "shape", None), getattr(Y_hat, "shape", None))
-    E = (context or {}).get("E", Y - Y_hat)
+    E = (context if context is not None else {}).get("E", Y - Y_hat)
     N = E.size if E.size else 1
     gY     = upstream_grad * ( 2.0 * E / N)
     gY_hat = upstream_grad * (-2.0 * E / N)
@@ -91,7 +91,7 @@ def _mse_grad(upstream_grad: np.ndarray, Y: np.ndarray, Y_hat: np.ndarray, *, co
     return gY, gY_hat
 
 def MSE(Y: Tensor, Y_hat: Tensor) -> Tensor:
-    """Mean squared error (public wrapper).
+    """Mean squared error.
 
     Computes `mean((Y - Y_hat)^2)` over all elements.
 

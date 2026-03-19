@@ -14,6 +14,7 @@ import contextvars
 import logging
 import inspect
 from typing import Any
+from .util import ensure_forward_output, ensure_context_dict
 
 # *----------------------------------------------------*
 #                        GLOBALS
@@ -379,12 +380,24 @@ class Tensor:
     def __matmul__(self, other: Tensor)   -> Tensor:
         return TensorValuedFunction(_matmul, _matmul_grad)(self, other)
     
+    def dot(self, other: Tensor)          -> Tensor:
+        return TensorValuedFunction(_dot, _dot_grad)(self, other)
+    
     # RESHAPING
+    def squeeze(self, dim: int | tuple[int, ...] = None) -> Tensor:
+        return TensorValuedFunction(_squeeze, _squeeze_grad)(self, dim=dim)
+
+    def unsqueeze(self, dim: int) -> Tensor:
+        return TensorValuedFunction(_unsqueeze, _unsqueeze_grad)(self, dim=dim)
+
     def reshape(self, *shape: int) -> Tensor:
         return reshape(self, *shape)
 
     def flatten(self, *, keep_batch: bool = True, sample_ndim: int | None = None) -> Tensor:
         return flatten(self, keep_batch=keep_batch, sample_ndim=sample_ndim)
+    
+    def general_transpose(self, order: tuple[int, ...]) -> Tensor:
+        return TensorValuedFunction(_general_transpose, _general_transpose_grad)(self, order=order)
     
     # AUXILIARY OPS
     def argmax(self, axis: int | None = None, keepdims: bool = False) -> Tensor:
@@ -501,6 +514,7 @@ class TensorValuedFunction:
             node = TensorValuedFunction(self.forward_fn, self._grad_fn)
             node.inputs = list(inputs)
             output_data = _call_with_optional_context(node.forward_fn, arrays, node.fwd_ctx, kwargs)
+            ensure_forward_output(output_data, fn_name=node.forward_fn.__name__, tensor_type=Tensor)
             node.fwd_ctx.setdefault("out", output_data)
 
             output_tensor = Tensor(
@@ -515,6 +529,7 @@ class TensorValuedFunction:
 
         else:
             output_data = _call_with_optional_context(self.forward_fn, arrays, None, kwargs)
+            ensure_forward_output(output_data, fn_name=self.forward_fn.__name__, tensor_type=Tensor)
             output_tensor = Tensor(
                 data=output_data,
                 requires_grad=False
@@ -577,43 +592,44 @@ def _call_with_optional_context(fn, arrays, ctx, extra_kwargs=None):
     """Invoke `fn(*arrays)`, optionally passing `context=ctx` and accepted kwargs."""
     try:
         sig = inspect.signature(fn)
-        params = sig.parameters
-        accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-
-        kw = {}
-
-        # If caller supplied a 'context' dict, merge it into the node ctx
-        supplied_ctx = None
-        if extra_kwargs and "context" in extra_kwargs and isinstance(extra_kwargs["context"], dict):
-            supplied_ctx = extra_kwargs["context"]
-            if ctx is None:
-                ctx = {}
-            # merge (ctx was supplied by the engine, so it's empty at first)
-            for k, v in supplied_ctx.items():
-                if k not in ctx:
-                    ctx[k] = v
-
-        # Always pass the node context if the fn accepts it (or **kwargs)
-        if "context" in params or accepts_var_kw:
-            kw["context"] = ctx
-
-        # Forward any other accepted kwargs, but NEVER override 'context'
-        if extra_kwargs:
-            if accepts_var_kw:
-                # copy but drop 'context' to avoid clobbering cuz we already merged the node ctx and the supplied one
-                for k, v in extra_kwargs.items():
-                    if k != "context":
-                        kw[k] = v
-            else:
-                for k, v in extra_kwargs.items():
-                    if k == "context":
-                        continue
-                    if k in params:
-                        kw[k] = v
-
-        return fn(*arrays, **kw) if kw else fn(*arrays)
     except (ValueError, TypeError):
         return fn(*arrays)
+
+    params = sig.parameters
+    accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    kw = {}
+
+    # If caller supplied a 'context' dict, merge it into the node ctx
+    supplied_ctx = None
+    if extra_kwargs and "context" in extra_kwargs:
+        supplied_ctx = ensure_context_dict(extra_kwargs["context"])
+        if ctx is None:
+            ctx = {}
+        # merge (ctx was supplied by the engine, so it's empty at first)
+        for k, v in supplied_ctx.items():
+            if k not in ctx:
+                ctx[k] = v
+
+    # Always pass the node context if the fn accepts it (or **kwargs)
+    if "context" in params or accepts_var_kw:
+        kw["context"] = ctx
+
+    # Forward any other accepted kwargs, but NEVER override 'context'
+    if extra_kwargs:
+        if accepts_var_kw:
+            # copy but drop 'context' to avoid clobbering cuz we already merged the node ctx and the supplied one
+            for k, v in extra_kwargs.items():
+                if k != "context":
+                    kw[k] = v
+        else:
+            for k, v in extra_kwargs.items():
+                if k == "context":
+                    continue
+                if k in params:
+                    kw[k] = v
+
+    return fn(*arrays, **kw) if kw else fn(*arrays)
 
 def is_grad_enabled() -> bool:
     """Return whether gradient recording is currently enabled.
@@ -815,7 +831,7 @@ def _sqrt(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:
 
 @_shape_safe_grad
 def _sqrt_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | None = None):
-    s = (context or {}).get("out")
+    s = (context if context is not None else {}).get("out")
     if s is None:
         s = np.sqrt(x)
     return (0.5 * upstream_grad / (s + 1e-12),)
@@ -867,9 +883,183 @@ def _matmul(A: np.ndarray, B: np.ndarray, *, context: dict | None = None) -> np.
 @_shape_safe_grad
 def _matmul_grad(up: np.ndarray, A: np.ndarray, B: np.ndarray, *, context: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
     # up:(..., i, j) ; A:(..., i, k) ; B:(..., k, j)
-    dA = up @ np.swapaxes(B, -1, -2)            # (..., i, k)
-    dB = np.swapaxes(A, -1, -2) @ up            # (..., k, j)
-    return dA, dB
+    dL_dA = up @ np.swapaxes(B, -1, -2)            # (..., i, k)
+    dL_dB = np.swapaxes(A, -1, -2) @ up            # (..., k, j)
+    # ^ ^ ^ note: np.swapaxes(A, -1, -2) is transpose of each 2D slice
+    return dL_dA, dL_dB
+
+def _dot(X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    """Restricted dot product.
+
+    Supported cases:
+      1) vector·vector: ``(n,) · (n,) -> ()``
+      2) matrix·matrix: ``(m, n) · (n, p) -> (m, p)``
+
+    Any mixed-rank case (e.g. 1D·2D) or rank > 2 is rejected intentionally.
+    """
+    _logger.debug("_dot forward: X.shape=%s, Y.shape=%s", getattr(X, "shape", None), getattr(Y, "shape", None))
+    ctx = context if context is not None else {}
+    if X.ndim == 1:
+        if Y.ndim != 1:
+            raise ValueError(f"dot expects Y to be 1D when X is 1D; got X.ndim={X.ndim}, Y.ndim={Y.ndim}")
+        if Y.shape[0] != X.shape[0]:
+            raise ValueError(f"dot shape mismatch for 1D inputs: X.shape={X.shape}, Y.shape={Y.shape}")
+        _update_ctx(ctx, dims=1)
+        out = np.dot(X, Y)
+        _logger.debug("_dot forward path=1Dx1D: out.shape=%s", getattr(out, "shape", ()))
+        return out
+    elif X.ndim == 2:
+        if Y.ndim != 2:
+            raise ValueError(f"dot expects Y to be 2D when X is 2D; got X.ndim={X.ndim}, Y.ndim={Y.ndim}")
+        if X.shape[1] != Y.shape[0]:
+            raise ValueError(
+                f"dot shape mismatch for 2D inputs: X.shape={X.shape}, Y.shape={Y.shape}; "
+                f"expected X.shape[1] == Y.shape[0]"
+            )
+        _update_ctx(ctx, dims=2)
+        out = X @ Y
+        _logger.debug("_dot forward path=2Dx2D: out.shape=%s", getattr(out, "shape", None))
+        return out
+    else:
+        raise ValueError(
+            f"dot supports only 1D·1D or 2D·2D inputs, got X.ndim={X.ndim}, Y.ndim={Y.ndim}"
+        )
+
+@_shape_safe_grad
+def _dot_grad(upstream: np.ndarray, X: np.ndarray, Y: np.ndarray, *, context: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Gradient for restricted dot.
+
+    Uses context["dims"] recorded in forward to dispatch between:
+      - 1D·1D: scalar output
+      - 2D·2D: matrix output
+    """
+    _logger.debug(
+        "_dot_grad backward: upstream.shape=%s, X.shape=%s, Y.shape=%s",
+        getattr(upstream, "shape", None), getattr(X, "shape", None), getattr(Y, "shape", None)
+    )
+    if context is None:
+        raise RuntimeError("_dot_grad requires supplied context")
+    match context.get("dims"):
+        case 1:
+            # upstream is a scalar (xTy is 0-dim)
+            dL_dX = upstream * Y
+            dL_dY = upstream * X
+            _logger.debug("_dot_grad backward path=1Dx1D: dL_dX.shape=%s, dL_dY.shape=%s", dL_dX.shape, dL_dY.shape)
+        case 2:
+            # upstream is a matrix (XTY is 2-dim)
+            dL_dX = upstream @ Y.T
+            dL_dY = X.T @ upstream
+            _logger.debug("_dot_grad backward path=2Dx2D: dL_dX.shape=%s, dL_dY.shape=%s", dL_dX.shape, dL_dY.shape)
+        case _:
+            raise RuntimeError(
+                "dot backward is missing or has invalid forward context key 'dims'; "
+                f"received dims={context.get('dims')!r}"
+            )
+    return dL_dX, dL_dY
+
+def _squeeze(X: np.ndarray, dim: int | tuple[int, ...] | None, *, context: dict | None = None) -> np.ndarray:
+    """Remove singleton dimensions from ``X``.
+
+    Args:
+        X: Input array.
+        dim: Axis or axes to squeeze. If ``None``, squeeze all singleton axes.
+        context: Optional node context cache.
+
+    Returns:
+        np.ndarray: Squeezed array.
+
+    Raises:
+        TypeError: If ``dim`` is not ``None``, ``int``, or ``tuple[int, ...]``.
+        ValueError: For duplicate/out-of-range axes or non-singleton target axes.
+    """
+    ctx = context if context is not None else {}
+
+    if dim is not None and not isinstance(dim, (int, tuple)):
+        raise TypeError(f"_squeeze dim must be int | tuple[int, ...] | None, got {type(dim).__name__}.")
+
+    if isinstance(dim, tuple):
+        if any(not isinstance(d, int) for d in dim):
+            raise TypeError(f"_squeeze dim tuple must contain only ints, got {dim!r}.")
+        if len(set(dim)) != len(dim):
+            raise ValueError(f"_squeeze dim tuple contains duplicates: {dim!r}.")
+        nd = X.ndim
+        norm = tuple(d + nd if d < 0 else d for d in dim)
+        if any(d < 0 or d >= nd for d in norm):
+            raise ValueError(f"_squeeze axis out of range for X.ndim={X.ndim}: dim={dim!r}.")
+        bad = [d for d in norm if X.shape[d] != 1]
+        if bad:
+            raise ValueError(
+                f"_squeeze can only remove singleton axes; got non-singleton axes {bad} for shape {X.shape}."
+            )
+    elif isinstance(dim, int):
+        d = dim + X.ndim if dim < 0 else dim
+        if d < 0 or d >= X.ndim:
+            raise ValueError(f"_squeeze axis {dim} out of range for X.ndim={X.ndim}.")
+        if X.shape[d] != 1:
+            raise ValueError(
+                f"_squeeze axis {dim} has size {X.shape[d]} (shape={X.shape}); only size-1 axes are squeezable."
+            )
+
+    try:
+        X = np.squeeze(X, axis=dim)
+    except ValueError as e:
+        raise ValueError(f"_squeeze failed for shape={X.shape}, dim={dim!r}.") from e
+
+    _update_ctx(ctx, dim=dim)
+    return X
+
+@_shape_safe_grad
+def _squeeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    """Backward for squeeze: restore the original input shape."""
+    if context is None:
+        raise RuntimeError("_squeeze_grad requires a context dict supplied by TensorValuedFunction.")
+    try:
+        return upstream.reshape(X.shape)
+    except ValueError as e:
+        raise ValueError(
+            f"_squeeze_grad cannot reshape upstream shape {upstream.shape} back to input shape {X.shape}."
+        ) from e
+
+def _unsqueeze(X: np.ndarray, dim: int, *, context: dict | None = None) -> np.ndarray:
+    """Insert a singleton dimension into ``X`` at ``dim``."""
+    ctx = context if context is not None else {}
+    if dim is None:
+        raise TypeError("_unsqueeze requires an integer dim; got None.")
+    if not isinstance(dim, int):
+        raise TypeError(f"_unsqueeze dim must be int, got {type(dim).__name__}.")
+
+    min_dim = -X.ndim - 1
+    max_dim = X.ndim
+    if dim < min_dim or dim > max_dim:
+        raise ValueError(f"_unsqueeze axis {dim} out of range for X.ndim={X.ndim} (valid: [{min_dim}, {max_dim}]).")
+
+    X = np.expand_dims(X, axis=dim)
+    norm_dim = dim if dim >= 0 else dim + X.ndim
+    _update_ctx(ctx, dim=norm_dim)
+    return X
+
+@_shape_safe_grad
+def _unsqueeze_grad(upstream: np.ndarray, X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    """Backward for unsqueeze: remove the inserted singleton dimension."""
+    if context is None:
+        raise RuntimeError("_unsqueeze_grad requires a context dict supplied by TensorValuedFunction.")
+    if "dim" not in context:
+        raise RuntimeError("_unsqueeze_grad missing 'dim' in context (must be cached in forward).")
+    dim = context.get("dim")
+    if not isinstance(dim, int):
+        raise TypeError(f"_unsqueeze_grad context['dim'] must be int, got {type(dim).__name__}.")
+    if dim < 0 or dim >= upstream.ndim:
+        raise ValueError(f"_unsqueeze_grad axis {dim} out of range for upstream.ndim={upstream.ndim}.")
+    if upstream.shape[dim] != 1:
+        raise ValueError(
+            f"_unsqueeze_grad expected singleton size on axis {dim}, got upstream shape {upstream.shape}."
+        )
+    g = np.squeeze(upstream, axis=dim)
+    if g.shape != X.shape:
+        raise RuntimeError(
+            f"_unsqueeze_grad produced shape {g.shape}, expected original input shape {X.shape}."
+        )
+    return g
 
 def _reshape_fwd(new_shape: tuple[int, ...]):
     def _reshape(x: np.ndarray, *, context: dict | None = None) -> np.ndarray:
@@ -880,7 +1070,7 @@ def _reshape_fwd(new_shape: tuple[int, ...]):
 def _reshape_bwd():
     @_shape_safe_grad
     def _reshape_grad(up: np.ndarray, x: np.ndarray, *, context: dict | None = None):
-        in_shape = (context or {}).get("in_shape", x.shape)
+        in_shape = (context if context is not None else {}).get("in_shape", x.shape)
         return (up.reshape(in_shape),)
     return _reshape_grad
 
@@ -939,6 +1129,41 @@ def _slice_grad(upstream_grad: np.ndarray, x: np.ndarray, *, context: dict | Non
     np.add.at(g, index, upstream_grad)
     return (g,)
 
+def _general_transpose(X: np.ndarray, *, order: tuple[int, ...], context: dict | None = None) -> np.ndarray:
+    # Example:
+    # Say original order is (0, 1, 2, 3)
+    # New order is (3, 0, 1, 2)                  (3)     (0)     (1)     (2)
+    # So to restore the original, we need to move 0 -> 3, 1 -> 0, 2 -> 1, 3 -> 2,
+    # which is inverse_order := (1, 2, 3, 0) = tuple(np.argsort(order)), which is sorting, but by index,
+    # that is, if you apply fancy indexing you will get the sorted array (0, 1, 2, 3) -- exactly the order we want.
+    # This answers the question "how should the indices be permuted so that the contents are sorted."
+    try:
+        out = X.transpose(order)
+    except ValueError:
+        raise ValueError("Axes don't match array")
+    except Exception:
+        raise
+    #                                    |
+    #                              Note: V we use lambda to cache lazily in case .backward is never called
+    _update_ctx(context, inv_order=lambda: tuple(np.argsort(order)), out=None, overwrite=False)
+
+    return out
+
+@_shape_safe_grad
+def _general_transpose_grad(upstream: np.ndarray, X: np.ndarray, order: tuple[int, ...] | None = None, *, context: dict | None = None):
+    ctx = context if context is not None else {}
+
+    inv_order = ctx.get("inv_order")
+    if inv_order is None:
+        raise RuntimeError("The inverse order is missing; it must be cached during the forward pass")
+    if callable(inv_order):
+        inv_order = inv_order()
+
+    grad = upstream.transpose(inv_order)
+
+    return (grad,)
+
+
 __all__ = [
     "GradientNotDefined",
     "Tensor",
@@ -949,7 +1174,9 @@ __all__ = [
     "no_grad",
     "ln",
     "log2",
-    "sqrt"
+    "sqrt",
+    "reshape",
+    "flatten",
 ]
 
 if __name__ == "__main__":

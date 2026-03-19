@@ -675,10 +675,12 @@ class CosineAnnealingLR(LRScheduler):
         return lr
 
 __all__ = [
+    "Optim",
     "SGD",
     "AdaGrad",
     "RMSProp",
     "Adam",
+    "LRScheduler",
     "StepLR",
     "ExponentialLR",
     "CosineAnnealingLR"

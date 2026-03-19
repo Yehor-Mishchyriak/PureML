@@ -14,7 +14,7 @@ from zarr.codecs import BloscCodec, BloscShuffle, BloscCname
 # built-in
 import logging
 from datetime import datetime, date
-from typing import Callable, Iterable, Iterator, Any
+from typing import Callable, Iterable, Iterator, Any, Literal
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +28,8 @@ import random
 
 _logger = logging.getLogger(__name__)
 
+ZarrOpenMode = Literal["r", "r+", "a", "w", "w-", "x"]
+
 # *----------------------------------------------------*
 #                        CLASSES
 # *----------------------------------------------------*
@@ -40,7 +42,7 @@ class ArrayStorage:
     array with shape ``(N, *item_shape)`` where axis 0 is append-only.
     Per-block metadata (chunk length, item shape, dtype) is kept in group attrs.
     """
-    def __init__(self, pth: Path | str, mode: str) -> None:
+    def __init__(self, pth: Path | str, mode: ZarrOpenMode) -> None:
         """Initialize the storage and ensure a root group exists.
 
         Args:
@@ -817,12 +819,51 @@ def rng_from_seed(seed: int | None = None) -> tuple[np.random.Generator, int]:
     s = int(seed) if seed is not None else get_random_seed()
     return np.random.default_rng(s), s
 
+# *----------------------------------------------------*
+#                PROTOCOLS / VALIDATORS
+# *----------------------------------------------------*
+
+def ensure_context_dict(ctx, *, name: str = "context") -> dict:
+    if not isinstance(ctx, dict):
+        raise TypeError(f"{name} must be a dict when supplied to TensorValuedFunction")
+    return ctx
+
+def ensure_forward_output(output_data: Any, *, fn_name: str, tensor_type=None) -> None:
+    if tensor_type is not None and isinstance(output_data, tensor_type):
+        raise TypeError(f"Forward '{fn_name}' must return a raw ndarray/scalar, not a Tensor")
+
+def validate_layer_contract(layer, *, tensor_type) -> None:
+    for i, t in enumerate(layer.parameters):
+        if not isinstance(t, tensor_type):
+            raise TypeError(f"Layer parameters[{i}] must be Tensor, got {type(t).__name__}")
+        if not t.requires_grad:
+            raise ValueError(f"Layer parameters[{i}] must have requires_grad=True")
+
+    bufs = layer.named_buffers()
+    if not isinstance(bufs, dict):
+        raise TypeError(f"named_buffers() must return a dict, got {type(bufs).__name__}")
+    for name, buf in bufs.items():
+        if not isinstance(name, str):
+            raise TypeError(f"named_buffers keys must be str, got {type(name).__name__}")
+        if isinstance(buf, (tensor_type, np.ndarray)):
+            continue
+        if is_json_literal(buf):
+            continue
+        raise TypeError(
+            "named_buffers values must be Tensor, ndarray, or JSON-literal; "
+            f"key '{name}' has {type(buf).__name__}"
+        )
+
 
 __all__ = [
     "ArrayStorage",
     "batches_of",
     "compose_steps",
+    "current_time",
     "is_json_literal",
+    "ensure_context_dict",
+    "ensure_forward_output",
+    "validate_layer_contract",
     "get_random_seed",
     "rng_from_seed"
 ]

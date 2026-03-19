@@ -4,7 +4,7 @@
 
 Tiny but powerful 100% NumPy-based deep learning framework with explicit autodiff and lightweight utilities.
 
-[![PyPI](https://img.shields.io/pypi/v/ym-pure-ml)](https://pypi.org/project/ym-pure-ml/) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Yehor-Mishchyriak/PureML/blob/main/LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![GitHub](https://img.shields.io/badge/GitHub-Repo-black?logo=github)](https://github.com/Yehor-Mishchyriak/PureML/) [![status](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff/status.svg)](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff) [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18277559-blue)](https://doi.org/10.5281/zenodo.18277559)
+[![PyPI](https://img.shields.io/pypi/v/ym-pure-ml)](https://pypi.org/project/ym-pure-ml/) ![PyPI downloads](https://img.shields.io/pypi/dm/ym-pure-ml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Yehor-Mishchyriak/PureML/blob/main/LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![GitHub](https://img.shields.io/badge/GitHub-Repo-black?logo=github)](https://github.com/Yehor-Mishchyriak/PureML/) [![status](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff/status.svg)](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff) [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18277559-blue)](https://doi.org/10.5281/zenodo.18277559)
 
 ---
 
@@ -104,10 +104,52 @@ x.zero_grad()         # sets grad to None
 - Elementwise arithmetic: `+`, `-`, `*`, `/`, `**`, unary `-`
 - Comparisons: `.eq`, `.ne`, `.lt`, `.le`, `.gt`, `.ge` (return no-grad tensors)
 - Reductions: `.all`, `.any`; `.argmax(axis, keepdims=False)` (non-differentiable)
-- Linear algebra: `.T`, `@` (batched matmul supported)
-- Reshaping: `.reshape(*shape)`, `.flatten(keep_batch=True, sample_ndim=None)`
+- Linear algebra: `.T`, `@` (batched matmul supported), `.dot(other)`
+  - `Tensor.dot` supports only `1D·1D -> scalar` and `2D·2D -> matrix`.
+  - Mixed-rank or rank>2 inputs are rejected with explicit shape/rank errors.
+- Axis permutation: `.general_transpose(order)` for arbitrary N-D transposes with autodiff support.
+- Reshaping: `.reshape(*shape)`, `.flatten(keep_batch=True, sample_ndim=None)`, `.squeeze(dim=None)`, `.unsqueeze(dim)`
 - Indexing: `x[...]` uses NumPy semantics; backward scatter-adds into a zeros-like array of the input shape (supports advanced/repeated indices).
 - Math helpers: `pureml.machinery.sqrt`, `ln`, `log2`
+
+### Squeeze and Unsqueeze (`Tensor`)
+
+Use these when you need to explicitly control singleton dimensions (`size == 1`) without breaking autograd.
+
+- `x.squeeze(dim=None)`
+  - Removes singleton dimensions.
+  - `dim=None`: remove all singleton axes.
+  - `dim=int | tuple[int, ...]`: remove only the specified singleton axis/axes.
+  - Raises if any specified axis is not singleton.
+
+- `x.unsqueeze(dim)`
+  - Inserts a singleton dimension at axis `dim`.
+  - Valid range for `dim` when `x.ndim = n`: `[-n-1, n]`.
+  - Useful for making shapes broadcast-compatible or adding channel/batch-style axes.
+
+When to use:
+- Remove trailing singleton dims from model outputs before loss/metrics.
+- Add a channel axis for convolution-style inputs.
+- Align shapes intentionally for broadcasting (instead of relying on accidental broadcasting).
+
+Examples:
+
+```python
+import numpy as np
+from pureml import Tensor
+
+# Remove singleton dims
+logits = Tensor(np.random.randn(32, 10, 1), requires_grad=True)
+logits2d = logits.squeeze(-1)      # (32, 10)
+
+# Add channel dim
+images = Tensor(np.random.randn(32, 28, 28), requires_grad=True)
+images_nchw = images.unsqueeze(1)  # (32, 1, 28, 28)
+
+# Gradients flow through both ops
+out = (images_nchw * images_nchw).reshape(32, -1)
+out.backward()
+```
 
 ### Defining custom ops
 
@@ -119,12 +161,11 @@ x.zero_grad()         # sets grad to None
 
 - `sigmoid(x: Tensor)`  
 - `relu(x: Tensor)`  
+- `leaky_relu(x: Tensor, negative_slope=0.01)`  
 - `tanh(x: Tensor)`  
 - `softmax(x: Tensor, axis=-1)` - stable, axis-aware  
 - `log_softmax(x: Tensor, axis=-1)` - stable, axis-aware  
 All accept any shape; `axis` is the class dimension for softmax/log_softmax. Return Tensors and provide Jacobian-free backward passes.
-
-Each returns a Tensor and has a Jacobian-free backward pass.
 
 ---
 
@@ -149,10 +190,56 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
 
 - **Affine(fan_in, fan_out, method="xavier-glorot-normal", W=None, b=None, bias=True, seed=None)**  
   - Linear map `Y = X @ W + b`.  
+  - `method`: `"xavier-glorot-normal"` or `"kaiming-normal"`.
   - `W`: optional Tensor shaped `(fan_in, fan_out)` or `(fan_out, fan_in)` (auto-transposed).  
   - `b`: optional Tensor `(fan_out,)`; ignored when `bias=False`.  
   - Seeds init via `seed`; buffers persist `method`, `seed`, `use_bias`.  
   - Gradients are always tracked for supplied `W`/`b`.
+  - Practical tip: use `"kaiming-normal"` for ReLU/LeakyReLU-heavy MLPs; use Xavier as a general default.
+
+- **Conv1D(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, use_bias=True, pad_with=0.0, W=None, b=None, method="kaiming-normal", nonlinearity="relu", training=True, seed=None)**  
+  - Expects input shape `(B, C, L)` and returns `(B, out_channels, L_out)`.  
+  - Output length: `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`.  
+  - `kernel_size`, `stride`, `padding`, `dilation`: int values controlling receptive field and output resolution.  
+  - `W`: optional Tensor shaped `(out_channels, in_channels*kL)` or `(in_channels*kL, out_channels)` (auto-transposed).  
+  - `b`: optional Tensor of shape `(out_channels,)`; if `use_bias=False`, bias is disabled and excluded from `.parameters`.  
+  - Checkpointing support includes both trainables and layer config via `.named_buffers()` / `.apply_state()`.
+  - Use when data has one spatial/temporal axis (signals, token-level feature maps, sensor streams).
+
+- **Conv2D(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, use_bias=True, pad_with=0.0, W=None, b=None, method="kaiming-normal", nonlinearity="relu", training=True, seed=None)**  
+  - Expects input shape `(B, C, H, W)` and returns `(B, out_channels, H_out, W_out)`.  
+  - Output size:
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - `kernel_size`, `stride`, `padding`, `dilation`: int or tuple values controlling receptive field and output resolution.  
+  - `W`: optional Tensor shaped `(out_channels, in_channels*kH*kW)` or `(in_channels*kH*kW, out_channels)` (auto-transposed).  
+  - `b`: optional Tensor of shape `(out_channels,)`; if `use_bias=False`, bias is disabled and excluded from `.parameters`.  
+  - Checkpointing support includes both trainables and layer config via `.named_buffers()` / `.apply_state()`.
+  - Use when data has two spatial axes (images, spectrogram-like feature maps).
+
+- **MaxPool1D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 1D max pooling.  
+  - Expects input shape `(B, C, L)` and returns `(B, C, L_out)`.  
+  - Output length: `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`.  
+  - Use to downsample 1D feature maps while keeping the strongest local response.
+
+- **MeanPool1D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 1D average pooling.  
+  - Expects input shape `(B, C, L)` and returns `(B, C, L_out)` using the same output formula as MaxPool1D.  
+  - Use for smoother downsampling in 1D pipelines.
+
+- **MaxPool2D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 2D max pooling.  
+  - Expects input shape `(B, C, H, W)` and returns `(B, C, H_out, W_out)`.  
+  - Output size:
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - Use to reduce spatial resolution and add local translation tolerance in CNN blocks.
+
+- **MeanPool2D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 2D average pooling.  
+  - Expects input shape `(B, C, H, W)` and returns `(B, C, H_out, W_out)` with the same output formulas as MaxPool2D.  
+  - Use when you want downsampling with less emphasis on isolated peaks.
 
 - **Dropout(p=0.5, seed=None, training=True)**  
   - Inverted dropout for 1D/2D inputs.  
@@ -166,13 +253,43 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Optional trainables `gamma`, `beta` (shape `(F,)`); optional buffers to resume `running_mean/variance`.  
   - Training uses batch stats and updates running; eval uses running only.
 
+- **BatchNorm2d(num_features, eps=1e-5, momentum=0.1, gamma=None, beta=None, running_variance=None, running_mean=None, training=True)**  
+  - Channel-wise BatchNorm for NCHW tensors `(B, C, H, W)`.  
+  - `num_features` is the channel count `C`.  
+  - Uses the same behavior and checkpoint semantics as BatchNorm1d (train uses current-batch stats, eval uses running stats).  
+  - Recommended normalization layer in convolutional blocks.
+
+- **LayerNorm1d(num_features, gamma=None, beta=None, eps=1e-5, bias=True, training=True)**  
+  - Normalizes across the **last axis** (feature axis), so input must end with `num_features` (e.g. `(B, F)` or `(B, T, F)`).  
+  - Per-sample normalization: computes mean/variance on the last axis only.  
+  - Affine parameters: learnable `gamma` and optional `beta` (both shape `(F,)`).  
+  - If `bias=False`, `beta` is disabled (not trainable and excluded from `.parameters`).  
+  - Buffers persist `eps` and `use_bias`; state loading restores both and validates parameter payloads.
+
 - **Embedding(V, D, pad_idx=None, method="xavier-glorot-normal", W=None, training=True, seed=None)**  
   - `V`: vocab size; `D`: embedding dim.  
   - `pad_idx`: optional int; that row is zeroed and receives no grad.  
   - `W`: optional Tensor `(V, D)` init; else Xavier/Glorot with `seed`.  
   - Gradients accumulate correctly for repeated indices. Buffers persist `padding_idx`, `seed`, `method`.
 
-- **Initializer**: `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
+- **Initializers**:
+  - `xavier_glorot_normal(fan_in, fan_out, rng=None)` -> `(W, b)` tensors with `requires_grad=True`.
+  - `kaiming_normal(fan_in, fan_out, nonlinearity="relu", param=None, rng=None)` -> `(W, b)` tensors with `requires_grad=True` (fan-in mode).
+  - `calculate_gain(nonlinearity, param=None)` -> recommended gain scalar for supported nonlinearities (useful when choosing initialization for your activation stack).
+
+### Unfold helpers
+
+- `unfold1d(X, kernel_size, stride, padding, dilation, pad_with=0.0)`  
+  - Input shape: `(B, C, L)`  
+  - Output shape: `(B, C*kL, L_out)` where `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`  
+  - Backward pass uses scatter-add into padded input space, then crops back to `(B, C, L)`.
+
+- `unfold2d(X, kernel_size, stride, padding, dilation, pad_with=0.0)`  
+  - Input shape: `(B, C, H, W)`  
+  - Output shape: `(B, C*kH*kW, H_out*W_out)` where  
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`  
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - Backward pass uses scatter-add into padded input space, then crops back to `(B, C, H, W)`.
 
 ---
 
@@ -356,3 +473,9 @@ test  = MnistDataset("test")    # (Tensor image, class index)
 - `KNN(k, d=euclidean_distance, standardize_features=True)`:
   - `fit(X, Y)`: stores samples/labels; optionally z-scores features per dimension (mean/std computed under `no_grad`). Enforces `1 <= k <= #samples` and matching sample counts.
   - `predict(x_q)`: standardizes the query if enabled, computes distances row-wise via `d`, selects `k` nearest labels, and breaks ties by nearest distance order.
+
+---
+
+## Contributing and Protocols
+
+For development workflow, architecture contracts, protocol rules, and release/branching guidance, see `CONTRIBUTING.md` in the repository root.

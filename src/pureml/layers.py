@@ -12,7 +12,7 @@
 Provides a `Layer` base (training mode toggle, parameters/buffers, apply_state),
 and concrete layers:
 - Affine with Xavier init, bias toggle, and seed/buffer metadata (W stored (n, m))
-- Dropout (inverted, cached mask/scale, seedable, mode-aware)
+- Dropout (1 and 2 -D) (inverted, cached mask/scale, seedable, mode-aware)
 - BatchNorm1d with running stats buffers and EMA momentum
 - Embedding with optional pad freezing and seedable init
 All layers use `TensorValuedFunction` ops from `machinery` and RNG helpers in `util`."""
@@ -22,13 +22,16 @@ from __future__ import annotations
 import numpy as np
 # built-in
 from abc import ABC, abstractmethod
+from math import floor
+from math import sqrt as m_sqrt
 import logging
+from typing import Literal
 # local
 from .machinery import (
     Tensor, TensorValuedFunction, _shape_safe_grad, _update_ctx, sqrt
 )
 from . import general_math
-from .util import rng_from_seed
+from .util import rng_from_seed, validate_layer_contract
 
 # *----------------------------------------------------*
 #                        GLOBALS
@@ -40,7 +43,9 @@ _logger = logging.getLogger(__name__)
 #               CLASSES & HELPER FUNCTIONS
 # *----------------------------------------------------*
 
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- WEIGHT INITIALIZATION STRATEGIES -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# *----------------------------------------------------*
+#                WEIGHT INITIALIZATIONS
+# *----------------------------------------------------*
 
 def xavier_glorot_normal(
     fan_in: int,
@@ -69,7 +74,128 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+_nonlinearity_types = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
+
+def calculate_gain(
+        nonlinearity: _nonlinearity_types,
+        param: int | float | None):
+    """Return the recommended gain for weight initialization.
+
+    This mirrors the common gain values used with Xavier/He-style initializers.
+
+    Args:
+        nonlinearity: Name of the activation/layer family. Supported values:
+            ``"Affine"``, ``"Conv1D"``, ``"Conv2D"``, ``"sigmoid"``,
+            ``"tanh"``, ``"relu"``, ``"leaky_relu"``.
+        param: Optional activation parameter. Used only for ``"leaky_relu"``
+            as the negative slope. If ``None``, defaults to ``0.01``.
+
+    Returns:
+        float: Recommended gain multiplier for the specified nonlinearity.
+
+    Raises:
+        ValueError: If ``nonlinearity`` is unsupported.
+    """
+    _logger.debug("calculate_gain: nonlinearity=%s, param=%s", nonlinearity, param)
+
+    if nonlinearity in {"Affine", "Conv1D", "Conv2D", "sigmoid"}:
+        gain = 1.0
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "tanh":
+        gain = 5.0 / 3.0
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "relu":
+        gain = m_sqrt(2.0)
+        _logger.debug("calculate_gain: gain=%s", gain)
+        return gain
+
+    if nonlinearity == "leaky_relu":
+        negative_slope = 0.01 if param is None else float(param)
+        gain = m_sqrt(2.0 / (1.0 + negative_slope ** 2))
+        _logger.debug("calculate_gain: negative_slope=%s, gain=%s", negative_slope, gain)
+        return gain
+
+    _logger.error("calculate_gain: unsupported nonlinearity=%s", nonlinearity)
+    raise ValueError(f"Unsupported nonlinearity: {nonlinearity}")
+
+def kaiming_normal(
+    fan_in: int,
+    fan_out: int,
+    nonlinearity: _nonlinearity_types = "relu",
+    *,
+    param: int | float | None = None,
+    rng: np.random.Generator | None = None
+) -> tuple[Tensor, Tensor]:
+    """Initialize weights and bias using Kaiming/He normal (fan-in mode).
+
+    The sampled weight variance is:
+        ``Var(W) = gain^2 / fan_in``
+    where ``gain`` depends on ``nonlinearity`` via :func:`calculate_gain`.
+
+    Args:
+        fan_in: Number of input features (> 0).
+        fan_out: Number of output features (> 0).
+        nonlinearity: Nonlinearity name used to choose the recommended gain.
+            Supported values are the same as for :func:`calculate_gain`.
+        param: Optional parameter passed to :func:`calculate_gain`. Used for
+            ``"leaky_relu"`` as the negative slope (default ``0.01`` when None).
+        rng: Optional NumPy random generator. If omitted, a fresh
+            ``np.random.default_rng()`` is used.
+
+    Returns:
+        tuple[Tensor, Tensor]:
+            - ``W`` with shape ``(fan_out, fan_in)``, ``requires_grad=True``
+            - ``b`` with shape ``(fan_out,)``, ``requires_grad=True``
+
+    Raises:
+        ValueError: If ``fan_in``/``fan_out`` are non-positive, or if ``param``
+            is non-finite.
+        TypeError: If ``param`` is not numeric when provided.
+    """
+    _logger.debug(
+        "kaiming_normal: fan_in=%s, fan_out=%s, nonlinearity=%s, param=%s, rng_provided=%s",
+        fan_in, fan_out, nonlinearity, param, rng is not None
+    )
+
+    if fan_in <= 0 or fan_out <= 0:
+        _logger.error("kaiming_normal: invalid fan dims fan_in=%s fan_out=%s", fan_in, fan_out)
+        raise ValueError(f"fan_in and fan_out must be > 0 (got {fan_in=}, {fan_out=})")
+
+    if param is not None:
+        if isinstance(param, bool) or not isinstance(param, (int, float, np.integer, np.floating)):
+            _logger.error("kaiming_normal: invalid param type=%s", type(param).__name__)
+            raise TypeError(f"param must be numeric or None, got {type(param).__name__}")
+        param = float(param)
+        if not np.isfinite(param):
+            _logger.error("kaiming_normal: non-finite param=%s", param)
+            raise ValueError(f"param must be finite, got {param}")
+
+    gen = rng or np.random.default_rng()
+    gain = calculate_gain(nonlinearity, param)
+    std = gain / m_sqrt(float(fan_in))
+
+    W = gen.normal(0.0, std, size=(fan_out, fan_in))
+    b = np.zeros((fan_out,))
+
+    _logger.debug(
+        "kaiming_normal: gain=%s, std=%s, W.shape=%s, b.shape=%s",
+        gain, std, W.shape, b.shape
+    )
+
+    return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
+
+_weight_init_funcs = {
+    "xavier-glorot-normal": xavier_glorot_normal,
+    "kaiming-normal": kaiming_normal,
+}
+
+_weight_init_funcs_type = Literal["xavier-glorot-normal", "kaiming-normal"]
+
+# *----------------------------------------------------*
 
 class Layer(ABC):
     """A module with (optional) trainable parameters and (optional) non-trainable buffers."""
@@ -122,6 +248,9 @@ class Layer(ABC):
         """Return mapping of buffer-name -> Tensor/ndarray (non-trainable). Default: {}."""
         return {}
 
+    def _validate_contract(self) -> None:
+        validate_layer_contract(self, tensor_type=Tensor)
+
     def apply_state(
         self,
         *,
@@ -129,15 +258,22 @@ class Layer(ABC):
         buffers: dict[str, np.ndarray] | None = None,
     ) -> None:
         """Default in-place state load: writes arrays into `parameters` and `named_buffers()` Tensors."""
+        self._validate_contract()
         # write trainables in-order
         if tunable:
+            if len(tunable) != len(self.parameters):
+                raise ValueError(
+                    f"{self.__class__.__name__}.apply_state expected {len(self.parameters)} tunable arrays; got {len(tunable)}"
+                )
             for t, arr in zip(self.parameters, tunable):
+                if arr is None:
+                    continue
                 t.data = np.asarray(arr, dtype=t.data.dtype)
 
         # write buffers by name (only if buffer is a Tensor)
         if buffers:
             for name, v in self.named_buffers().items():
-                if name in buffers and isinstance(v, Tensor):
+                if name in buffers and buffers[name] is not None and isinstance(v, Tensor):
                     v.data = np.asarray(buffers[name], dtype=v.data.dtype)
 
 class Affine(Layer):
@@ -153,7 +289,8 @@ class Affine(Layer):
     Args:
         fan_in (int): Input feature dimension `n`.
         fan_out (int): Output feature dimension `m`.
-        method (str, optional): Initialization method. Supported: `"xavier-glorot-normal"`.
+        method (str, optional): Initialization method. Supported:
+            `"xavier-glorot-normal"`, `"kaiming-normal"`.
             Defaults to `"xavier-glorot-normal"`.
         W (Tensor | None): Optional pre-initialized weight tensor. May be shaped
             `(fan_in, fan_out)` or `(fan_out, fan_in)`; it will be converted to internal
@@ -173,7 +310,7 @@ class Affine(Layer):
     def __init__(self,
                  fan_in: int,
                  fan_out: int, 
-                 method="xavier-glorot-normal", 
+                 method: _weight_init_funcs_type = "xavier-glorot-normal",
                  W: Tensor | None = None, 
                  b: Tensor | None = None,
                  *,
@@ -186,7 +323,7 @@ class Affine(Layer):
         self.use_bias = bool(bias)
 
         try:
-            init_fn = {"xavier-glorot-normal": xavier_glorot_normal}[method]
+            init_fn = _weight_init_funcs[method]
         except KeyError as e:
             raise ValueError(f"Unknown init method '{method}'") from e
 
@@ -260,6 +397,7 @@ class Affine(Layer):
 
         Raises:
             ValueError: If the number or shapes of arrays are incompatible."""
+        self._validate_contract()
 
         if buffers:
             if "use_bias" in buffers and buffers["use_bias"] is not None:
@@ -368,7 +506,7 @@ class Affine(Layer):
             getattr(W, "shape", None), getattr(b, "shape", None)
         )
 
-        ctx = context or {}
+        ctx = context if context is not None else {}
         WT = ctx.get("WT", W.T); WT = WT() if callable(WT) else (W.T if WT is None else WT)
         XT = ctx.get("XT", X.T); XT = XT() if callable(XT) else (X.T if XT is None else XT)
 
@@ -493,6 +631,7 @@ class Dropout(Layer):
                 - ``"p"`` (float): drop probability in ``[0, 1]``
                 - ``"training"`` (int/bool): set module mode
                 - ``"seed"`` (int): resets the RNG used to sample masks"""
+        self._validate_contract()
         if buffers:
             if "p" in buffers:
                 self.p = float(np.asarray(buffers["p"]).item())
@@ -526,8 +665,8 @@ class Dropout(Layer):
         )
         # elementwise upstream mult is by the same logic as for, say, relu
         grad_X = upstream_grad * (mask * scale) # (mask * scale) is the local grad
-        # mask/scale are not trainable; return zeros of matching shapes
-        return grad_X, np.zeros_like(mask), np.zeros_like(scale)
+        # mask/scale are non-differentiable constants for this op
+        return grad_X, None, None
 
     def __call__(self, X: Tensor) -> Tensor:
         """Apply dropout to `X` in training mode; identity in eval mode.
@@ -650,17 +789,60 @@ class BatchNorm1d(Layer):
             tuple[Tensor, Tensor]: ``(gamma, beta)`` of shape ``(F,)`` each."""
         return (self.gamma, self.beta)
 
-    def named_buffers(self) -> dict[str, Tensor]:
-        """Return running statistics buffers.
+    def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        """Return BN buffers and persisted configuration/state metadata.
 
         Returns:
-            dict[str, Tensor]: A mapping with:
+            dict[str, Tensor | np.ndarray]: Mapping with:
                 - ``"running_mean"``: EMA of per-feature means, shape ``(F,)``
-                - ``"running_variance"``: EMA of per-feature variances, shape ``(F,)``."""
+                - ``"running_variance"``: EMA of per-feature variances, shape ``(F,)``
+                - ``"eps"``: numerical stability constant (scalar Tensor)
+                - ``"momentum"``: EMA coefficient as float64 scalar
+                - ``"training"``: mode flag as int8 scalar (1 train, 0 eval)
+                - ``"num_features"``: expected feature dimension as int64 scalar."""
         return {
             "running_mean": self.running_mean,
             "running_variance": self.running_variance,
+            "eps": self.eps,
+            "momentum": np.asarray(float(self.momentum), dtype=np.float64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+            "num_features": np.asarray(int(self.num_features), dtype=np.int64),
         }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Restore BN parameters and buffers from checkpoint payloads."""
+        self._validate_contract()
+
+        if buffers:
+            # Restore Tensor buffers first: running stats + eps
+            super().apply_state(tunable=(), buffers=buffers)
+
+            if "num_features" in buffers and buffers["num_features"] is not None:
+                loaded_f = int(np.asarray(buffers["num_features"]).item())
+                if loaded_f != self.num_features:
+                    raise ValueError(
+                        f"BatchNorm1d num_features mismatch: checkpoint={loaded_f}, layer={self.num_features}"
+                    )
+
+            if "momentum" in buffers and buffers["momentum"] is not None:
+                self.momentum = float(np.asarray(buffers["momentum"]).item())
+
+            if "training" in buffers and buffers["training"] is not None:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+
+        if tunable:
+            if len(tunable) != 2:
+                raise ValueError(f"BatchNorm1d.apply_state expected 2 arrays (gamma, beta); got {len(tunable)}")
+
+            gamma_arr = np.asarray(tunable[0])
+            beta_arr = np.asarray(tunable[1])
+            if gamma_arr.shape != self.gamma.data.shape:
+                raise ValueError(f"Incompatible gamma shape {gamma_arr.shape}; expected {self.gamma.data.shape}")
+            if beta_arr.shape != self.beta.data.shape:
+                raise ValueError(f"Incompatible beta shape {beta_arr.shape}; expected {self.beta.data.shape}")
+
+            self.gamma.data = gamma_arr.astype(self.gamma.data.dtype, copy=False)
+            self.beta.data = beta_arr.astype(self.beta.data.dtype, copy=False)
 
     def __call__(self, X: Tensor) -> Tensor:
         """Apply BN over the batch axis for (B, F) input.
@@ -699,6 +881,221 @@ class BatchNorm1d(Layer):
         _logger.debug("BN1d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
+class BatchNorm2d(Layer):
+    """Batch Normalization for 4D NCHW inputs shaped ``(B, C, H, W)``.
+
+    This class reuses :class:`BatchNorm1d` by flattening spatial positions into
+    the batch axis:
+
+    ``(B, C, H, W) -> (B*H*W, C) -> BN1d -> (B, C, H, W)``.
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        *,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        gamma: Tensor | None = None,
+        beta: Tensor | None = None,
+        running_variance: Tensor | None = None,
+        running_mean: Tensor | None = None,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self._bn1d = BatchNorm1d(
+            num_features,
+            eps=eps,
+            momentum=momentum,
+            gamma=gamma,
+            beta=beta,
+            running_variance=running_variance,
+            running_mean=running_mean,
+            training=training,
+        )
+        _logger.debug(
+            "BN2d.__init__: C=%d, eps=%g, momentum=%.3f, training=%s",
+            int(num_features), float(eps), float(momentum), bool(training)
+        )
+
+    def on_mode_change(self, training: bool):
+        self._bn1d.training = bool(training)
+        _logger.debug("BatchNorm2d mode changed: training=%s", bool(training))
+
+    @property
+    def num_features(self) -> int:
+        return self._bn1d.num_features
+
+    @property
+    def momentum(self) -> float:
+        return self._bn1d.momentum
+
+    @momentum.setter
+    def momentum(self, v: float) -> None:
+        self._bn1d.momentum = float(v)
+
+    @property
+    def gamma(self) -> Tensor:
+        return self._bn1d.gamma
+
+    @property
+    def beta(self) -> Tensor:
+        return self._bn1d.beta
+
+    @property
+    def running_mean(self) -> Tensor:
+        return self._bn1d.running_mean
+
+    @property
+    def running_variance(self) -> Tensor:
+        return self._bn1d.running_variance
+
+    @property
+    def eps(self) -> Tensor:
+        return self._bn1d.eps
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return self._bn1d.parameters
+
+    def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        return self._bn1d.named_buffers()
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        self._bn1d.apply_state(tunable=tunable, buffers=buffers)
+        self._training = self._bn1d.training
+
+    def __call__(self, X: Tensor) -> Tensor:
+        x = X.data
+        if x.ndim != 4 or x.shape[1] != self.num_features:
+            raise ValueError(
+                f"BatchNorm2d expects input of shape (B, {self.num_features}, H, W); got {x.shape}"
+            )
+
+        B, C, H, W = x.shape
+        _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
+        flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
+        out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
+        _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
+        return out
+
+class LayerNorm1d(Layer):
+
+    def __init__(self,
+                num_features: int,
+                *,
+                gamma: Tensor | None = None,
+                beta: Tensor | None = None,
+                eps: float = 1e-5,
+                bias: bool = True,
+                training: bool = True):
+        
+        super().__init__(training=training)
+
+        if num_features <= 0:
+            raise ValueError(f"num_features must be > 0, got {num_features}")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be > 0, got {eps}")
+
+        self.num_features = int(num_features)
+        self.use_bias = bool(bias)
+
+        if gamma is None:
+            self.gamma = Tensor(np.ones((self.num_features,), dtype=np.float64), requires_grad=True)
+        else:
+            if gamma.shape != (self.num_features,):
+                raise ValueError(f"Incompatible gamma shape {gamma.shape}; expected {(self.num_features,)}")
+            self.gamma = gamma
+            self.gamma.requires_grad = True
+
+        if not self.use_bias:
+            if beta is not None:
+                raise ValueError("Received 'beta' but bias=False. Either pass bias=True or drop 'beta'.")
+            self.beta = Tensor(np.zeros((self.num_features,), dtype=self.gamma.dtype), requires_grad=False)
+        else:
+            if beta is None:
+                self.beta = Tensor(np.zeros((self.num_features,), dtype=np.float64), requires_grad=True)
+            else:
+                if beta.shape != (self.num_features,):
+                    raise ValueError(f"Incompatible beta shape {beta.shape}; expected {(self.num_features,)}")
+                self.beta = beta
+                self.beta.requires_grad = True
+
+        self.eps = Tensor(eps, requires_grad=False)
+        _logger.debug(
+            "LayerNorm1d initialized: num_features=%d, eps=%g, use_bias=%s, gamma.shape=%s, beta.shape=%s req_grad_beta=%s",
+            self.num_features, float(eps), self.use_bias,
+            getattr(self.gamma, "shape", None), getattr(self.beta, "shape", None), getattr(self.beta, "requires_grad", None)
+        )
+
+    def on_mode_change(self, training: bool):
+        _logger.debug("LayerNorm1d mode changed: training=%s", bool(training))
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return (self.gamma, self.beta) if self.use_bias else (self.gamma,)
+
+    def named_buffers(self) -> dict[str, Tensor | bool]:
+        return {
+            "eps": self.eps,
+            "use_bias": self.use_bias
+        }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        self._validate_contract()
+
+        if buffers:
+            # Delegate Tensor buffer restore (eps) to base implementation.
+            super().apply_state(tunable=(), buffers=buffers)
+            if "use_bias" in buffers and buffers["use_bias"] is not None:
+                prev = self.use_bias
+                self.use_bias = bool(int(np.asarray(buffers["use_bias"]).item()))
+                if not self.use_bias:
+                    self.beta.data[...] = 0.0
+                    self.beta.requires_grad = False
+                elif not prev:
+                    self.beta.requires_grad = True
+
+        if tunable:
+            expected = 2 if self.use_bias else 1
+            if len(tunable) != expected:
+                raise ValueError(
+                    f"LayerNorm1d.apply_state expected {expected} arrays "
+                    f"(gamma{', beta' if self.use_bias else ''}); got {len(tunable)}"
+                )
+
+            gamma_arr = np.asarray(tunable[0])
+            if gamma_arr.shape != self.gamma.data.shape:
+                raise ValueError(f"Incompatible gamma shape {gamma_arr.shape}; expected {self.gamma.data.shape}")
+            self.gamma.data = gamma_arr.astype(self.gamma.data.dtype, copy=False)
+
+            if self.use_bias:
+                beta_arr = np.asarray(tunable[1])
+                if beta_arr.shape != self.beta.data.shape:
+                    raise ValueError(f"Incompatible beta shape {beta_arr.shape}; expected {self.beta.data.shape}")
+                self.beta.data = beta_arr.astype(self.beta.data.dtype, copy=False)
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if not isinstance(X, Tensor):
+            raise TypeError(f"LayerNorm1d expects a Tensor, got {type(X)}")
+        if X.ndim < 1:
+            raise ValueError(f"LayerNorm1d expects input with at least 1 dimension, got shape {X.shape}")
+        if X.shape[-1] != self.num_features:
+            raise ValueError(
+                f"LayerNorm1d expects last dimension == num_features ({self.num_features}), got {X.shape}"
+            )
+
+        _logger.debug("LayerNorm1d __call__: training=%s, X.shape=%s", self.training, X.shape)
+        mu = general_math.mean(X, axis=-1).unsqueeze(-1) # [a, b, ..., y, z] -> [a, b, ..., y, 1]
+        sig2 = general_math.variance(X, axis=-1).unsqueeze(-1) # [a, b, ..., y, z] -> [a, b, ..., y, 1]
+        X_hat = (X - mu) / sqrt(sig2+self.eps)
+        if self.use_bias:
+            out = self.gamma * X_hat + self.beta
+        else:
+            out = self.gamma * X_hat
+        _logger.debug("LayerNorm1d __call__: out.shape=%s", getattr(out, "shape", None))
+        return out
+
 class Embedding(Layer):
     """Learned lookup table: returns rows of `W` for integer indices.
 
@@ -730,7 +1127,7 @@ class Embedding(Layer):
         D: int,
         *,
         pad_idx: int | None = None,
-        method="xavier-glorot-normal",
+        method: _weight_init_funcs_type = "xavier-glorot-normal",
         W: Tensor | None = None,
         training: bool = True,
         seed: int | None = None
@@ -740,9 +1137,7 @@ class Embedding(Layer):
         self.method = method
         self._rng, self.seed = rng_from_seed(seed)
 
-        init_fn = {
-            "xavier-glorot-normal": xavier_glorot_normal
-        }[method]
+        init_fn = _weight_init_funcs[method]
 
         if V <= 0 or D <= 0:
             raise ValueError(f"num_embeddings and embedding_dim must be positive, got {V=}, {D=}")
@@ -888,7 +1283,7 @@ class Embedding(Layer):
         #         to get the overall contribution of each entry toward the loss across ALL of the samples from the batch.
         # That is why we sum.
 
-        ctx = context or {}
+        ctx = context if context is not None else {}
         I = ctx.get("idx_flat")
         I = I() if callable(I) else I
         if I is None:
@@ -926,14 +1321,1239 @@ class Embedding(Layer):
         
         return out
 
+# *----------------------------------------------------*
+#          CNN HELPER FUNCTIONS (PRIVATE SCOPE)
+# *----------------------------------------------------*
+
+def _L_out(L_in: int, p: int, d: int, kL: int, s: int) -> int:
+    return floor((L_in + 2*p - d*(kL - 1) - 1) / s) + 1
+
+def _unfold2d(
+        X: np.ndarray, # (B, C, H, W)
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float,
+        *,
+        context: dict | None = None) -> np.ndarray:
+    """Unfold a 4D tensor into sliding local blocks (im2col layout).
+
+    Args:
+        X: Input array of shape ``(B, C, H, W)``.
+        kernel_size: ``(kH, kW)`` kernel size.
+        stride: ``(sH, sW)`` step of the sliding window.
+        padding: ``(pH, pW)`` zero-padding on both spatial sides.
+        dilation: ``(dH, dW)`` spacing between kernel taps.
+        pad_with: Constant value used for padding.
+        context: Optional cache used by ``_unfold2d_grad``.
+
+    Returns:
+        np.ndarray: Unfolded columns with shape ``(B, C*kH*kW, H_out*W_out)``.
+    """
+    _logger.debug(
+        "_unfold2d forward: X.shape=%s, kernel_size=%s, stride=%s, padding=%s, dilation=%s, pad_with=%s",
+        getattr(X, "shape", None), kernel_size, stride, padding, dilation, pad_with
+    )
+    if X.ndim != 4:
+        raise ValueError(f"_unfold2d expects X with shape (B, C, H, W), got {X.shape}")
+    for name, v in (("kernel_size", kernel_size), ("stride", stride), ("padding", padding), ("dilation", dilation)):
+        if not (isinstance(v, tuple) and len(v) == 2):
+            raise TypeError(f"{name} must be a tuple[int, int], got {v!r}")
+
+    B, C, H, W = X.shape # B - batch size, C - input channels, H, W - input spatial size
+    kH, kW = kernel_size # kH, kW - kernel spatial size
+    sH, sW = stride      # sH, sW - stride size along the H and W axes
+    dH, dW = dilation    # dH, dW - kernel dilation along the H and W axes
+    pH, pW = padding     # pH, pW - padding at the ends of the H and W axes
+    if kH <= 0 or kW <= 0:
+        raise ValueError(f"kernel_size entries must be > 0, got {kernel_size}")
+    if sH <= 0 or sW <= 0:
+        raise ValueError(f"stride entries must be > 0, got {stride}")
+    if dH <= 0 or dW <= 0:
+        raise ValueError(f"dilation entries must be > 0, got {dilation}")
+    if pH < 0 or pW < 0:
+        raise ValueError(f"padding entries must be >= 0, got {padding}")
+
+    X_pad = np.pad(X, pad_width=((0, 0), (0, 0), (pH, pH), (pW, pW)), mode="constant", constant_values=pad_with)
+    # ^^^ shaped: (B, C, pH+H+pH, pW+W+pW)
+
+    H_out = _L_out(H, pH, dH, kH, sH) # H length
+    W_out = _L_out(W, pW, dW, kW, sW) # W length
+    _logger.debug("_unfold2d forward: padded_shape=%s, H_out=%d, W_out=%d", X_pad.shape, H_out, W_out)
+    if H_out <= 0 or W_out <= 0:
+        raise ValueError(
+            "Invalid unfold2d output size. "
+            f"Got H_out={H_out}, W_out={W_out} from input={(H, W)}, "
+            f"kernel={(kH, kW)}, stride={(sH, sW)}, padding={(pH, pW)}, dilation={(dH, dW)}"
+        )
+
+    # auxiliary constants:
+    K = kH * kW # - kernel elements per channel
+    P = H_out * W_out # - number of sliding positions
+
+    H_start = np.arange(H_out) * sH # top-left y positions per output row
+    W_start = np.arange(W_out) * sW # top-left x positions per output col
+    H_taps  = np.arange(kH) * dH    # y offsets inside kernel with dilation
+    W_taps  = np.arange(kW) * dW    # x offsets inside kernel with dilation
+
+    H_centers, W_centers = np.meshgrid(H_start, W_start, indexing="ij")   # kernel centers (H_out, W_out), (H_out, W_out)
+    # ^^^ all output center/start coordinates flattened later to P
+    H_koords, W_koords   = np.meshgrid(H_taps, W_taps, indexing="ij")     # kernel taps around each center
+    # ^^^ all kernel offsets flattened later to K
+    H_centers = H_centers.reshape(-1); W_centers = W_centers.reshape(-1)  # flat kernel centers ([P,], [P,])
+    H_koords  = H_koords.reshape(-1);  W_koords  = W_koords.reshape(-1)   # flat kernel taps    ([K,], [K,])
+    # Now expand across the C channels:
+    #                 (K, 1) +          (1, P) = (K, P)
+    finalH = H_koords[..., None] + H_centers[None, ...]
+    finalW = W_koords[..., None] + W_centers[None, ...]
+    # ^^^ for each kernel element and each output position, compute absolute y/x in padded image
+
+    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1) -- channel ids 0..C-1, each repeated K times (one row per kernel tap);
+    #          ^ ^ ^ fancy indexing needs explicit per-row channel coordinates.
+    h_idx = np.tile(finalH, (C, 1))              # (C*K, P) -- we do it for each output location so there is P
+    w_idx = np.tile(finalW, (C, 1))              # (C*K, P) -- and this is within both H and W axes
+
+    # !NOTE: here's what h_idx and w_idx are: “Which pixel in the padded image did this column entry (in `col`) come from?”
+
+    # interpret the (C*K, P) shape as "K kernel taps per C channels for each output location"
+    cols = X_pad[:, c_idx, h_idx, w_idx]         # (B, C*K, P)
+
+    _update_ctx(context,
+        c_idx=lambda: c_idx, h_idx=lambda: h_idx, w_idx=lambda: w_idx, # note lazy caching
+        pH=pH, pW=pW, in_shape=X.shape, out=None, overwrite=False
+    )
+
+    _logger.debug("_unfold2d forward: cols.shape=%s", cols.shape)
+    return cols
+
+# -=-=-=-=-=-=-=- EXTRA np.add.at INFORMATION -=-=-=-=-=-=-=-
+# g = np.zeros((3, 3), dtype=int)
+#
+# h_idx = np.array([[0, 0, 1],
+#                   [0, 1, 1]])
+# w_idx = np.array([[0, 1, 0],
+#                   [0, 0, 1]])
+#
+# up = np.array([[1, 2, 3],
+#                [4, 5, 6]])
+#
+# np.add.at(g, (h_idx, w_idx), up)
+#    ^^^
+# This means: for every position (i, j) in up,
+# do g[h_idx[i,j], w_idx[i,j]] += up[i,j]
+# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
+
+@_shape_safe_grad
+def _unfold2d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    """Backward pass for ``_unfold2d`` via scatter-add into padded input space.
+
+    Args:
+        upstream_grad: Gradient w.r.t unfolded output with shape ``(B, R, P)``.
+        X: Original forward input of shape ``(B, C, H, W)``.
+        context: Forward cache containing ``c_idx/h_idx/w_idx`` and ``pH/pW``.
+
+    Returns:
+        tuple[np.ndarray]: A single-element tuple containing ``dL/dX``.
+    """
+    _logger.debug(
+        "_unfold2d_grad backward: upstream_grad.shape=%s, X.shape=%s",
+        getattr(upstream_grad, "shape", None), getattr(X, "shape", None)
+    )
+    if X.ndim != 4:
+        raise ValueError(f"_unfold2d_grad expects X with shape (B, C, H, W), got {X.shape}")
+    ctx = context if context is not None else {}
+    if any(k not in ctx for k in ("c_idx", "h_idx", "w_idx", "pH", "pW")):
+        raise RuntimeError("_unfold2d_grad requires c_idx/h_idx/w_idx/pH/pW in context")
+    c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx          # (C*K, 1) (note the call operator due to lazy caching)
+    h_idx = ctx["h_idx"]; h_idx = h_idx() if callable(h_idx) else h_idx          # (C*K, P)
+    w_idx = ctx["w_idx"]; w_idx = w_idx() if callable(w_idx) else w_idx          # (C*K, P)
+    pH, pW = int(ctx["pH"]), int(ctx["pW"])
+    if c_idx.ndim == 1:
+        c_idx = c_idx[:, None]
+    if h_idx.shape != w_idx.shape:
+        raise ValueError(f"h_idx and w_idx must have same shape, got {h_idx.shape} vs {w_idx.shape}")
+
+    B, C, H, W = X.shape
+    R, P = h_idx.shape
+    _logger.debug(
+        "_unfold2d_grad backward: c_idx.shape=%s, h_idx.shape=%s, w_idx.shape=%s, pH=%d, pW=%d",
+        getattr(c_idx, "shape", None), getattr(h_idx, "shape", None), getattr(w_idx, "shape", None), pH, pW
+    )
+    if upstream_grad.shape != (B, R, P):
+        raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
+    gpad = np.zeros((B, C, H + 2*pH, W + 2*pW), dtype=upstream_grad.dtype) # gpad must be the same shape as X_pad
+
+    # scatter-add (inverse of gather)
+    np.add.at(gpad, (slice(None), c_idx, h_idx, w_idx), upstream_grad)
+
+    # !NOTE: very importantly upstream_grad is shaped as [B, R, P] -- it's a batch of matrices.
+    # Each column P is a receptive field's output. For a fixed batch b and position p, upstream_grad[b, :, p]
+    # is a vector of length R -- gradient for every pixel that participated in that receptive field.
+    # Each row = same kernel tap across all positions. For fixed r: upstream_grad[b, r, :]
+    # is gradient for that specific kernel tap across all sliding windows.
+
+    # Logic:
+    # What np.add.at is doing:
+    # FWD:
+    # cols[b, r, p] = X_pad[b, c_idx[r], h_idx[r, p], w_idx[r, p]]
+    # BWD:
+    # gpad[b, c_idx[r], h_idx[r,p], w_idx[r,p]] += upstream_grad[b, r, p]
+    # ^^^  which is what np.add.at(gpad, (slice(None), c_idx, h_idx, w_idx), upstream_grad) does.
+    # This is necessary because many (r,p) can hit the same source pixel (overlap),
+    # so gradients must be summed. add.at guarantees accumulation for repeated indices.
+
+    # crop padding back to input shape
+    gX = gpad[:, :, pH:pH+H, pW:pW+W]
+
+    _logger.debug("_unfold2d_grad backward: gX.shape=%s", gX.shape)
+    return (gX,)
+
+# =-=-=-=-=-=-=- EXTRA INFORMATION ON UNFOLD2D -=-=-=-=-=-=-=
+# (Input image) X = 
+# ┌───┬───┬───┬───┐
+# │ a │ b │ c │ d │
+# ├───┼───┼───┼───┤
+# │ e │ f │ g │ h │
+# ├───┼───┼───┼───┤
+# │ i │ j │ k │ l │
+# ├───┼───┼───┼───┤
+# │ m │ n │ o │ p │
+# └───┴───┴───┴───┘
+# Each 2×2 window becomes one column:
+# p=0        p=1        p=2
+# [a b]      [b c]      [c d]
+# [e f]      [f g]      [g h]
+
+# p=3        p=4        p=5
+# [e f]      [f g]      [g h]
+# [i j]      [j k]      [k l]
+
+# p=6        p=7        p=8
+# [i j]      [j k]      [k l]
+# [m n]      [n o]      [o p]
+# Flatten each window → column vector of length R = kH·kW = 4:
+# cols = (R × P)
+#
+#       p0  p1  p2  p3  p4  p5  p6  p7  p8
+# r0    a   b   c   e   f   g   i   j   k
+# r1    b   c   d   f   g   h   j   k   l
+# r2    e   f   g   i   j   k   m   n   o
+# r3    f   g   h   j   k   l   n   o   p
+# ^ ^ ^ -- Each entry came from one pixel in X.
+#
+# Now add batch + channels:
+# If you have:
+#   •	B images
+#   •	C channels
+# R = C × kH × kW
+# P = H_out × W_out
+# Then, cols.shape = (B, R, P), that is,
+# Batch 0 → (R × P) matrix
+# Batch 1 → (R × P) matrix
+# Batch 2 → (R × P) matrix
+# ...
+#
+# Now imagine gradients coming back from later layers:
+# upstream_grad[b] =
+#        p0    p1    p2    p3    p4    p5    p6    p7    p8
+# r0   g00   g01   g02   g03   g04   g05   g06   g07   g08
+# r1   g10   g11   g12   g13   g14   g15   g16   g17   g18
+# r2   g20   g21   g22   g23   g24   g25   g26   g27   g28
+# r3   g30   g31   g32   g33   g34   g35   g36   g37   g38
+
+# ^ ^ ^ -- Each value must go back to the pixel it originally came from.
+# Example:
+# 	•	g₀₀ came from pixel a
+# 	•	g₁₀ came from pixel b
+# 	•	g₂₀ came from pixel e
+# 	•	g₃₀ came from pixel f
+#
+# But pixel f appears in multiple windows → multiple grads hit it.
+# So backward does:
+# grad[f] += g₃₀ + g₁₁ + g₀₄ + ...
+# Now, each 'f' pixel is identified by h and w _idx, so we do:
+# grad[h_idx[r,p], w_idx[r,p]] += upstream_grad[r, p]
+# 
+# The following also helps understand the idea:
+# upstream_grad is the same shape as cols, obviously
+# So, upstream_grad[r, p] is contributions of each (r, p)th entry of cols.
+# But here's the kicker: h_idx[r,p] gives all the heights where the pixel responsible
+# for the (r, p) grad entry is located in the X_pad image height-wise, while w_idx[r,p] tells us
+# the same but width-wise, so we take all the grad entries (contributions of this pixel) and add
+# them together so that the overall shape matches the shape of the original (folded) image.
+# -=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=--=-=-=-=-=-=-=
+
+# *----------------------------------------------------*
+def _unfold1d(
+        X: np.ndarray, # (B, C, L)
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float,
+        *,
+        context: dict | None = None) -> np.ndarray:
+    """Unfold a 3D tensor into 1D sliding windows.
+
+    Args:
+        X: Input array of shape ``(B, C, L)``.
+        kernel_size: Kernel length ``kL``.
+        stride: Sliding stride ``sL``.
+        padding: Symmetric padding ``pL``.
+        dilation: Kernel dilation ``dL``.
+        pad_with: Constant value used for padding.
+        context: Optional cache used by ``_unfold1d_grad``.
+
+    Returns:
+        np.ndarray: Unfolded columns with shape ``(B, C*kL, L_out)``.
+    """
+    _logger.debug(
+        "_unfold1d forward: X.shape=%s, kernel_size=%s, stride=%s, padding=%s, dilation=%s, pad_with=%s",
+        getattr(X, "shape", None), kernel_size, stride, padding, dilation, pad_with
+    )
+    if X.ndim != 3:
+        raise ValueError(f"_unfold1d expects X with shape (B, C, L), got {X.shape}")
+    if kernel_size <= 0:
+        raise ValueError(f"kernel_size must be > 0, got {kernel_size}")
+    if stride <= 0:
+        raise ValueError(f"stride must be > 0, got {stride}")
+    if dilation <= 0:
+        raise ValueError(f"dilation must be > 0, got {dilation}")
+    if padding < 0:
+        raise ValueError(f"padding must be >= 0, got {padding}")
+
+    B, C, L = X.shape
+    kL = kernel_size
+    sL = stride
+    dL = dilation
+    pL = padding
+
+    X_pad = np.pad(
+        X,
+        pad_width=((0, 0), (0, 0), (pL, pL)),
+        mode="constant",
+        constant_values=pad_with
+    )
+
+    L_out = _L_out(L, pL, dL, kL, sL)
+    _logger.debug("_unfold1d forward: padded_shape=%s, L_out=%d", X_pad.shape, L_out)
+    if L_out <= 0:
+        raise ValueError(
+            "Invalid unfold1d output size. "
+            f"Got L_out={L_out} from input={L}, kernel={kL}, stride={sL}, padding={pL}, dilation={dL}"
+        )
+
+    K = kL
+    P = L_out
+
+    L_start = np.arange(L_out) * sL
+    L_taps = np.arange(kL) * dL
+
+    finalL = L_taps[:, None] + L_start[None, :]  # (K, P)
+
+    c_idx = np.repeat(np.arange(C), K)[:, None]  # (C*K, 1)
+    l_idx = np.tile(finalL, (C, 1))              # (C*K, P)
+
+    cols = X_pad[:, c_idx, l_idx]                # (B, C*K, P)
+
+    _update_ctx(
+        context,
+        c_idx=lambda: c_idx,
+        l_idx=lambda: l_idx,
+        pL=pL,
+        in_shape=X.shape,
+        out=None,
+        overwrite=False
+    )
+
+    _logger.debug("_unfold1d forward: cols.shape=%s", cols.shape)
+    return cols
+
+@_shape_safe_grad
+def _unfold1d_grad(upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None):
+    """Backward pass for ``_unfold1d`` via scatter-add into padded length axis.
+
+    Args:
+        upstream_grad: Gradient w.r.t unfolded output with shape ``(B, R, P)``.
+        X: Original forward input of shape ``(B, C, L)``.
+        context: Forward cache containing ``c_idx/l_idx`` and ``pL``.
+
+    Returns:
+        tuple[np.ndarray]: A single-element tuple containing ``dL/dX``.
+    """
+    _logger.debug(
+        "_unfold1d_grad backward: upstream_grad.shape=%s, X.shape=%s",
+        getattr(upstream_grad, "shape", None), getattr(X, "shape", None)
+    )
+    if X.ndim != 3:
+        raise ValueError(f"_unfold1d_grad expects X with shape (B, C, L), got {X.shape}")
+    ctx = context if context is not None else {}
+    if any(k not in ctx for k in ("c_idx", "l_idx", "pL")):
+        raise RuntimeError("_unfold1d_grad requires c_idx/l_idx/pL in context")
+    c_idx = ctx["c_idx"]; c_idx = c_idx() if callable(c_idx) else c_idx
+    l_idx = ctx["l_idx"]; l_idx = l_idx() if callable(l_idx) else l_idx
+    pL = int(ctx["pL"])
+    if c_idx.ndim == 1:
+        c_idx = c_idx[:, None]
+
+    B, C, L = X.shape
+    R, P = l_idx.shape
+    _logger.debug(
+        "_unfold1d_grad backward: c_idx.shape=%s, l_idx.shape=%s, pL=%d",
+        getattr(c_idx, "shape", None), getattr(l_idx, "shape", None), pL
+    )
+    if upstream_grad.shape != (B, R, P):
+        raise ValueError(f"Expected upstream_grad shape {(B, R, P)}, got {upstream_grad.shape}")
+    gpad = np.zeros((B, C, L + 2*pL), dtype=upstream_grad.dtype)
+
+    np.add.at(gpad, (slice(None), c_idx, l_idx), upstream_grad)
+
+    gX = gpad[:, :, pL:pL+L]
+
+    _logger.debug("_unfold1d_grad backward: gX.shape=%s", gX.shape)
+    return (gX,)
+
+# *----------------------------------------------------*
+#          CNN HELPER FUNCTIONS (PUBLIC SCOPE)
+# *----------------------------------------------------*
+
+def unfold2d(X: Tensor,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0):
+    """Extract sliding 2D patches from a tensor (im2col-style).
+
+    For an input ``X`` with shape ``(B, C, H, W)``, this returns a tensor of
+    shape ``(B, C*kH*kW, H_out*W_out)``, where:
+
+    - ``H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1``
+    - ``W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1``
+
+    Args:
+        X: Input tensor of shape ``(B, C, H, W)``.
+        kernel_size: Kernel size ``(kH, kW)``.
+        stride: Sliding stride ``(sH, sW)``.
+        padding: Symmetric padding ``(pH, pW)`` on spatial dimensions.
+        dilation: Dilation ``(dH, dW)`` for kernel taps.
+        pad_with: Constant used to fill padded regions.
+
+    Returns:
+        Tensor: Tensor of shape ``(B, C*kH*kW, H_out*W_out)`` containing
+        flattened receptive fields.
+
+    Notes:
+        The output layout is convenient for convolution-by-matmul workflows:
+        each column is one receptive field, each row is one ``(channel, tap)`` pair.
+    """
+    return TensorValuedFunction(
+            _unfold2d,
+            _unfold2d_grad)(
+                X, 
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                pad_with=pad_with)
+
+def unfold1d(X: Tensor,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0):
+    """Extract sliding 1D patches from a tensor.
+
+    For an input ``X`` with shape ``(B, C, L)``, this returns a tensor of
+    shape ``(B, C*kL, L_out)``, where:
+
+    - ``L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1``
+
+    Args:
+        X: Input tensor of shape ``(B, C, L)``.
+        kernel_size: Kernel length ``kL``.
+        stride: Sliding stride ``sL``.
+        padding: Symmetric padding ``pL`` on the length axis.
+        dilation: Dilation ``dL`` for kernel taps.
+        pad_with: Constant used to fill padded regions.
+
+    Returns:
+        Tensor: Tensor of shape ``(B, C*kL, L_out)`` containing flattened
+        receptive fields along the length axis.
+
+    Notes:
+        The output layout mirrors ``unfold2d``: rows encode ``(channel, tap)``,
+        and columns encode output positions.
+    """
+    return TensorValuedFunction(
+            _unfold1d,
+            _unfold1d_grad)(
+                X,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                pad_with=pad_with)
+
+# *----------------------------------------------------*
+#                   CNN CORE LAYERS
+# *----------------------------------------------------*
+
+class Conv2D(Layer):
+    """2D convolution layer built on top of ``unfold2d`` + matrix multiplication.
+
+    The layer expects input shaped ``(B, C, H, W)`` and returns
+    ``(B, out_channels, H_out, W_out)`` where output spatial sizes follow the
+    standard convolution formula using ``kernel_size``, ``stride``, ``padding``,
+    and ``dilation``.
+
+    Weights are stored in flattened im2col form:
+    ``W.shape == (out_channels, in_channels * kH * kW)``.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        use_bias: bool = True,
+        pad_with: float = 0.0,
+        W: Tensor | None = None,
+        b: Tensor | None = None,
+        *,
+        method: _weight_init_funcs_type = "kaiming-normal",
+        nonlinearity: _nonlinearity_types = "relu",
+        training: bool = True,
+        seed: int | None = None):
+        """Initialize a Conv2D layer.
+
+        Args:
+            in_channels: Number of input channels.
+            out_channels: Number of output channels (number of kernels).
+            kernel_size: Kernel size as int or ``(kH, kW)``.
+            stride: Stride as int or ``(sH, sW)``.
+            padding: Symmetric padding as int or ``(pH, pW)``.
+            dilation: Dilation as int or ``(dH, dW)``.
+            use_bias: Whether to include learnable bias terms.
+            pad_with: Constant value used when padding inputs before unfold.
+            W: Optional pre-initialized weight tensor. Accepted shapes:
+                ``(out_channels, in_channels*kH*kW)`` or transposed
+                ``(in_channels*kH*kW, out_channels)``.
+            b: Optional pre-initialized bias tensor of shape ``(out_channels,)``.
+            method: Initialization method name.
+            nonlinearity: Nonlinearity hint used by some initializers
+                (e.g., Kaiming gain).
+            training: Initial mode flag.
+            seed: Optional RNG seed used for initialization.
+        """
+
+        super().__init__(training=training)
+
+        self.method = method
+        self.nonlinearity = nonlinearity
+        self._rng, self.seed = rng_from_seed(seed)
+        self.use_bias = bool(use_bias)
+
+        try:
+            init_fn = _weight_init_funcs[method]
+        except KeyError as e:
+            raise ValueError(f"Unknown init method '{method}'") from e
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = self._pair(kernel_size)
+        self.stride = self._pair(stride)
+        self.padding = self._pair(padding)
+        self.dilation = self._pair(dilation)
+        self.pad_with = pad_with
+
+        # trainable parameters
+        fan_in = self.in_channels * self.kernel_size[0] * self.kernel_size[1]
+        init_kwargs = {"rng": self._rng}
+        if method == "kaiming-normal":
+            init_kwargs["nonlinearity"] = nonlinearity
+
+        W_init = b_init = None
+        if (W is None) or (self.use_bias and b is None):
+            W_init, b_init = init_fn(fan_in, out_channels, **init_kwargs)
+
+        # W accepts either (out_channels, fan_in) or (fan_in, out_channels)
+        if W is None:
+            self.W = W_init
+        else:
+            if W.shape == (out_channels, fan_in):
+                self.W = W
+            elif W.shape == (fan_in, out_channels):
+                self.W = Tensor(W.data.T, requires_grad=True)
+            else:
+                raise ValueError(
+                    f"Incompatible W shape {W.shape}; expected {(out_channels, fan_in)} "
+                    f"or {(fan_in, out_channels)}"
+                )
+        self.W.requires_grad = True
+
+        if not self.use_bias:
+            if b is not None:
+                raise ValueError("Received 'b' but use_bias=False. Either pass use_bias=True or drop 'b'.")
+            self.b = Tensor(np.zeros((out_channels,), dtype=self.W.dtype), requires_grad=False)
+        else:
+            if b is None:
+                self.b = b_init
+            else:
+                if b.shape != (out_channels,):
+                    raise ValueError(f"Incompatible b shape {b.shape}; expected {(out_channels,)}")
+                self.b = b
+            self.b.requires_grad = True
+
+        _logger.debug(
+            "Conv2D initialized: seed=%s, method=%s, nonlinearity=%s, in_channels=%d, "
+            "out_channels=%d, kernel_size=%s, stride=%s, padding=%s, dilation=%s, "
+            "use_bias=%s, W.shape=%s, b.shape=%s",
+            self.seed, self.method, self.nonlinearity,
+            self.in_channels, self.out_channels,
+            self.kernel_size, self.stride, self.padding, self.dilation,
+            self.use_bias, getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
+    
+    @staticmethod
+    def _pair(v: int | tuple[int, int]):
+        """Normalize an int or pair into a 2-tuple."""
+        if isinstance(v, int):
+            return (v, v)
+        return v
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        """Return trainable parameters in layer order."""
+        if self.use_bias:
+            return (self.W, self.b)
+        return (self.W,)
+
+    def named_buffers(self) -> dict[str, np.ndarray]:
+        """Return non-trainable metadata required for checkpointing."""
+        seed_val = 0 if self.seed is None else self.seed
+        return {
+            "method": np.array(self.method.encode("utf-8"), dtype=np.bytes_),
+            "nonlinearity": np.array(self.nonlinearity.encode("utf-8"), dtype=np.bytes_),
+            "seed": np.asarray(seed_val, dtype=np.uint64),
+            "use_bias": np.asarray(int(self.use_bias), dtype=np.int8),
+            "in_channels": np.asarray(int(self.in_channels), dtype=np.int64),
+            "out_channels": np.asarray(int(self.out_channels), dtype=np.int64),
+            "kernel_size": np.asarray(self.kernel_size, dtype=np.int64),
+            "stride": np.asarray(self.stride, dtype=np.int64),
+            "padding": np.asarray(self.padding, dtype=np.int64),
+            "dilation": np.asarray(self.dilation, dtype=np.int64),
+            "pad_with": np.asarray(float(self.pad_with), dtype=np.float64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+        }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Load trainable tensors and persisted metadata into this layer."""
+        _logger.debug(
+            "Conv2D.apply_state called: n_tunable=%d, has_buffers=%s",
+            len(tunable) if tunable else 0, buffers is not None
+        )
+        self._validate_contract()
+
+        if buffers:
+            def _decode_text(val) -> str:
+                if isinstance(val, np.ndarray):
+                    val = val.item()
+                if isinstance(val, (bytes, bytearray)):
+                    val = val.decode("utf-8", "ignore")
+                return str(val)
+
+            # immutable shape/config guards
+            if "in_channels" in buffers and buffers["in_channels"] is not None:
+                got = int(np.asarray(buffers["in_channels"]).item())
+                if got != self.in_channels:
+                    raise ValueError(f"Conv2D in_channels mismatch: checkpoint={got}, layer={self.in_channels}")
+            if "out_channels" in buffers and buffers["out_channels"] is not None:
+                got = int(np.asarray(buffers["out_channels"]).item())
+                if got != self.out_channels:
+                    raise ValueError(f"Conv2D out_channels mismatch: checkpoint={got}, layer={self.out_channels}")
+            if "kernel_size" in buffers and buffers["kernel_size"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["kernel_size"]).reshape(-1))
+                if got != self.kernel_size:
+                    raise ValueError(f"Conv2D kernel_size mismatch: checkpoint={got}, layer={self.kernel_size}")
+            if "stride" in buffers and buffers["stride"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["stride"]).reshape(-1))
+                if got != self.stride:
+                    raise ValueError(f"Conv2D stride mismatch: checkpoint={got}, layer={self.stride}")
+            if "padding" in buffers and buffers["padding"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["padding"]).reshape(-1))
+                if got != self.padding:
+                    raise ValueError(f"Conv2D padding mismatch: checkpoint={got}, layer={self.padding}")
+            if "dilation" in buffers and buffers["dilation"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["dilation"]).reshape(-1))
+                if got != self.dilation:
+                    raise ValueError(f"Conv2D dilation mismatch: checkpoint={got}, layer={self.dilation}")
+
+            if "use_bias" in buffers and buffers["use_bias"] is not None:
+                prev = self.use_bias
+                self.use_bias = bool(int(np.asarray(buffers["use_bias"]).item()))
+                if not self.use_bias:
+                    self.b.data[...] = 0.0
+                    self.b.requires_grad = False
+                elif not prev:
+                    self.b.requires_grad = True
+
+            if "seed" in buffers and buffers["seed"] is not None:
+                seed_val = int(np.asarray(buffers["seed"]).item())
+                self.seed = seed_val
+                self._rng, _ = rng_from_seed(seed_val)
+
+            if "method" in buffers and buffers["method"] is not None:
+                self.method = _decode_text(buffers["method"])
+
+            if "nonlinearity" in buffers and buffers["nonlinearity"] is not None:
+                self.nonlinearity = _decode_text(buffers["nonlinearity"])
+
+            if "pad_with" in buffers and buffers["pad_with"] is not None:
+                self.pad_with = float(np.asarray(buffers["pad_with"]).item())
+
+            if "training" in buffers and buffers["training"] is not None:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+
+        if tunable:
+            expected = 2 if self.use_bias else 1
+            if len(tunable) != expected:
+                raise ValueError(
+                    f"Conv2D.apply_state expected {expected} arrays "
+                    f"(W{', b' if self.use_bias else ''}); got {len(tunable)}"
+                )
+
+            W_arr = np.asarray(tunable[0])
+            o, ck = self.W.data.shape
+            if W_arr.shape == (o, ck):
+                self.W.data = W_arr.astype(self.W.data.dtype, copy=False)
+            elif W_arr.shape == (ck, o):
+                self.W.data = W_arr.T.astype(self.W.data.dtype, copy=False)
+            else:
+                raise ValueError(f"Incompatible W shape {W_arr.shape}; expected {(o, ck)} or {(ck, o)}")
+
+            if self.use_bias:
+                b_arr = np.asarray(tunable[1])
+                if b_arr.shape != self.b.data.shape:
+                    raise ValueError(f"Incompatible b shape {b_arr.shape}; expected {self.b.data.shape}")
+                self.b.data = b_arr.astype(self.b.data.dtype, copy=False)
+
+        _logger.debug(
+            "Conv2D.apply_state complete: method=%s, nonlinearity=%s, use_bias=%s, "
+            "W.shape=%s, b.shape=%s",
+            self.method, self.nonlinearity, self.use_bias,
+            getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
+    
+    def __call__(self, X: Tensor) -> Tensor:
+        """Apply Conv2D to an input tensor ``(B, C, H, W)``."""
+        if X.ndim != 4:
+            raise ValueError(f"Conv2D expects input of shape (B, C, H, W), got {X.shape}")
+
+        B, C, H, W = X.shape
+        if C != self.in_channels:
+            raise ValueError(
+                f"Conv2D expected {self.in_channels} input channels, got {C} "
+                f"(input shape {X.shape})"
+            )
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        dH, dW = self.dilation
+        pH, pW = self.padding
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        _logger.debug(
+            "Conv2D forward: X.shape=%s, W.shape=%s, b.shape=%s, kernel_size=%s, "
+            "stride=%s, padding=%s, dilation=%s, H_out=%d, W_out=%d",
+            X.shape, self.W.shape, getattr(self.b, "shape", None),
+            self.kernel_size, self.stride, self.padding, self.dilation, H_out, W_out
+        )
+        cols = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        Z = (self.W @ cols)
+        if self.use_bias:
+            Z += self.b.unsqueeze(0).unsqueeze(2)
+        Z = Z.reshape(B, self.out_channels, H_out, W_out)
+        _logger.debug("Conv2D forward: out.shape=%s", getattr(Z, "shape", None))
+        return Z
+
+class Conv1D(Layer):
+    """1D convolution layer built on top of ``unfold1d`` + matrix multiplication.
+
+    The layer expects input shaped ``(B, C, L)`` and returns
+    ``(B, out_channels, L_out)`` where output length follows the standard
+    convolution formula using ``kernel_size``, ``stride``, ``padding``,
+    and ``dilation``.
+
+    Weights are stored in flattened im2col form:
+    ``W.shape == (out_channels, in_channels * kL)``.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int] = 1,
+        stride: int | tuple[int] = 1,
+        padding: int | tuple[int] = 0,
+        dilation: int | tuple[int] = 1,
+        use_bias: bool = True,
+        pad_with: float = 0.0,
+        W: Tensor | None = None,
+        b: Tensor | None = None,
+        *,
+        method: _weight_init_funcs_type = "kaiming-normal",
+        nonlinearity: _nonlinearity_types = "relu",
+        training: bool = True,
+        seed: int | None = None
+    ):
+        """Initialize a Conv1D layer.
+
+        Args:
+            in_channels: Number of input channels.
+            out_channels: Number of output channels (number of kernels).
+            kernel_size: Kernel length as int or ``(kL,)``.
+            stride: Stride as int or ``(sL,)``.
+            padding: Symmetric padding as int or ``(pL,)``.
+            dilation: Dilation as int or ``(dL,)``.
+            use_bias: Whether to include learnable bias terms.
+            pad_with: Constant value used when padding inputs before unfold.
+            W: Optional pre-initialized weight tensor. Accepted shapes:
+                ``(out_channels, in_channels*kL)`` or transposed
+                ``(in_channels*kL, out_channels)``.
+            b: Optional pre-initialized bias tensor of shape ``(out_channels,)``.
+            method: Initialization method name.
+            nonlinearity: Nonlinearity hint used by some initializers
+                (e.g., Kaiming gain).
+            training: Initial mode flag.
+            seed: Optional RNG seed used for initialization.
+        """
+        super().__init__(training=training)
+
+        self.method = method
+        self.nonlinearity = nonlinearity
+        self._rng, self.seed = rng_from_seed(seed)
+        self.use_bias = bool(use_bias)
+
+        try:
+            init_fn = _weight_init_funcs[method]
+        except KeyError as e:
+            raise ValueError(f"Unknown init method '{method}'") from e
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = self._single(kernel_size)
+        self.stride = self._single(stride)
+        self.padding = self._single(padding)
+        self.dilation = self._single(dilation)
+        self.pad_with = pad_with
+
+        # trainable parameters
+        fan_in = self.in_channels * self.kernel_size
+        init_kwargs = {"rng": self._rng}
+        if method == "kaiming-normal":
+            init_kwargs["nonlinearity"] = nonlinearity
+
+        W_init = b_init = None
+        if (W is None) or (self.use_bias and b is None):
+            W_init, b_init = init_fn(fan_in, out_channels, **init_kwargs)
+
+        # W accepts either (out_channels, fan_in) or (fan_in, out_channels)
+        if W is None:
+            self.W = W_init
+        else:
+            if W.shape == (out_channels, fan_in):
+                self.W = W
+            elif W.shape == (fan_in, out_channels):
+                self.W = Tensor(W.data.T, requires_grad=True)
+            else:
+                raise ValueError(
+                    f"Incompatible W shape {W.shape}; expected {(out_channels, fan_in)} "
+                    f"or {(fan_in, out_channels)}"
+                )
+        self.W.requires_grad = True
+
+        if not self.use_bias:
+            if b is not None:
+                raise ValueError("Received 'b' but use_bias=False. Either pass use_bias=True or drop 'b'.")
+            self.b = Tensor(np.zeros((out_channels,), dtype=self.W.dtype), requires_grad=False)
+        else:
+            if b is None:
+                self.b = b_init
+            else:
+                if b.shape != (out_channels,):
+                    raise ValueError(f"Incompatible b shape {b.shape}; expected {(out_channels,)}")
+                self.b = b
+            self.b.requires_grad = True
+
+        _logger.debug(
+            "Conv1D initialized: seed=%s, method=%s, nonlinearity=%s, in_channels=%d, "
+            "out_channels=%d, kernel_size=%s, stride=%s, padding=%s, dilation=%s, "
+            "use_bias=%s, W.shape=%s, b.shape=%s",
+            self.seed, self.method, self.nonlinearity,
+            self.in_channels, self.out_channels,
+            self.kernel_size, self.stride, self.padding, self.dilation,
+            self.use_bias, getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
+
+    @staticmethod
+    def _single(v: int | tuple[int]):
+        """Normalize an int or length-1 tuple into an int."""
+        if isinstance(v, int):
+            return v
+        if isinstance(v, tuple) and len(v) == 1 and isinstance(v[0], int):
+            return v[0]
+        raise TypeError(f"Expected int or tuple[int] of length 1, got {v!r}")
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        """Return trainable parameters in layer order."""
+        if self.use_bias:
+            return (self.W, self.b)
+        return (self.W,)
+
+    def named_buffers(self) -> dict[str, np.ndarray]:
+        """Return non-trainable metadata required for checkpointing."""
+        seed_val = 0 if self.seed is None else self.seed
+        return {
+            "method": np.array(self.method.encode("utf-8"), dtype=np.bytes_),
+            "nonlinearity": np.array(self.nonlinearity.encode("utf-8"), dtype=np.bytes_),
+            "seed": np.asarray(seed_val, dtype=np.uint64),
+            "use_bias": np.asarray(int(self.use_bias), dtype=np.int8),
+            "in_channels": np.asarray(int(self.in_channels), dtype=np.int64),
+            "out_channels": np.asarray(int(self.out_channels), dtype=np.int64),
+            "kernel_size": np.asarray(int(self.kernel_size), dtype=np.int64),
+            "stride": np.asarray(int(self.stride), dtype=np.int64),
+            "padding": np.asarray(int(self.padding), dtype=np.int64),
+            "dilation": np.asarray(int(self.dilation), dtype=np.int64),
+            "pad_with": np.asarray(float(self.pad_with), dtype=np.float64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+        }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Load trainable tensors and persisted metadata into this layer."""
+        _logger.debug(
+            "Conv1D.apply_state called: n_tunable=%d, has_buffers=%s",
+            len(tunable) if tunable else 0, buffers is not None
+        )
+        self._validate_contract()
+
+        if buffers:
+            def _decode_text(val) -> str:
+                if isinstance(val, np.ndarray):
+                    val = val.item()
+                if isinstance(val, (bytes, bytearray)):
+                    val = val.decode("utf-8", "ignore")
+                return str(val)
+
+            # immutable shape/config guards
+            if "in_channels" in buffers and buffers["in_channels"] is not None:
+                got = int(np.asarray(buffers["in_channels"]).item())
+                if got != self.in_channels:
+                    raise ValueError(f"Conv1D in_channels mismatch: checkpoint={got}, layer={self.in_channels}")
+            if "out_channels" in buffers and buffers["out_channels"] is not None:
+                got = int(np.asarray(buffers["out_channels"]).item())
+                if got != self.out_channels:
+                    raise ValueError(f"Conv1D out_channels mismatch: checkpoint={got}, layer={self.out_channels}")
+            if "kernel_size" in buffers and buffers["kernel_size"] is not None:
+                got = int(np.asarray(buffers["kernel_size"]).item())
+                if got != self.kernel_size:
+                    raise ValueError(f"Conv1D kernel_size mismatch: checkpoint={got}, layer={self.kernel_size}")
+            if "stride" in buffers and buffers["stride"] is not None:
+                got = int(np.asarray(buffers["stride"]).item())
+                if got != self.stride:
+                    raise ValueError(f"Conv1D stride mismatch: checkpoint={got}, layer={self.stride}")
+            if "padding" in buffers and buffers["padding"] is not None:
+                got = int(np.asarray(buffers["padding"]).item())
+                if got != self.padding:
+                    raise ValueError(f"Conv1D padding mismatch: checkpoint={got}, layer={self.padding}")
+            if "dilation" in buffers and buffers["dilation"] is not None:
+                got = int(np.asarray(buffers["dilation"]).item())
+                if got != self.dilation:
+                    raise ValueError(f"Conv1D dilation mismatch: checkpoint={got}, layer={self.dilation}")
+
+            if "use_bias" in buffers and buffers["use_bias"] is not None:
+                prev = self.use_bias
+                self.use_bias = bool(int(np.asarray(buffers["use_bias"]).item()))
+                if not self.use_bias:
+                    self.b.data[...] = 0.0
+                    self.b.requires_grad = False
+                elif not prev:
+                    self.b.requires_grad = True
+
+            if "seed" in buffers and buffers["seed"] is not None:
+                seed_val = int(np.asarray(buffers["seed"]).item())
+                self.seed = seed_val
+                self._rng, _ = rng_from_seed(seed_val)
+
+            if "method" in buffers and buffers["method"] is not None:
+                self.method = _decode_text(buffers["method"])
+
+            if "nonlinearity" in buffers and buffers["nonlinearity"] is not None:
+                self.nonlinearity = _decode_text(buffers["nonlinearity"])
+
+            if "pad_with" in buffers and buffers["pad_with"] is not None:
+                self.pad_with = float(np.asarray(buffers["pad_with"]).item())
+
+            if "training" in buffers and buffers["training"] is not None:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+
+        if tunable:
+            expected = 2 if self.use_bias else 1
+            if len(tunable) != expected:
+                raise ValueError(
+                    f"Conv1D.apply_state expected {expected} arrays "
+                    f"(W{', b' if self.use_bias else ''}); got {len(tunable)}"
+                )
+
+            W_arr = np.asarray(tunable[0])
+            o, ck = self.W.data.shape
+            if W_arr.shape == (o, ck):
+                self.W.data = W_arr.astype(self.W.data.dtype, copy=False)
+            elif W_arr.shape == (ck, o):
+                self.W.data = W_arr.T.astype(self.W.data.dtype, copy=False)
+            else:
+                raise ValueError(f"Incompatible W shape {W_arr.shape}; expected {(o, ck)} or {(ck, o)}")
+
+            if self.use_bias:
+                b_arr = np.asarray(tunable[1])
+                if b_arr.shape != self.b.data.shape:
+                    raise ValueError(f"Incompatible b shape {b_arr.shape}; expected {self.b.data.shape}")
+                self.b.data = b_arr.astype(self.b.data.dtype, copy=False)
+
+        _logger.debug(
+            "Conv1D.apply_state complete: method=%s, nonlinearity=%s, use_bias=%s, "
+            "W.shape=%s, b.shape=%s",
+            self.method, self.nonlinearity, self.use_bias,
+            getattr(self.W, "shape", None), getattr(self.b, "shape", None)
+        )
+
+    def __call__(self, X: Tensor) -> Tensor:
+        """Apply Conv1D to an input tensor ``(B, C, L)``."""
+        if X.ndim != 3:
+            raise ValueError(f"Conv1D expects input of shape (B, C, L), got {X.shape}")
+
+        B, C, L = X.shape
+        if C != self.in_channels:
+            raise ValueError(
+                f"Conv1D expected {self.in_channels} input channels, got {C} "
+                f"(input shape {X.shape})"
+            )
+        kL = self.kernel_size
+        sL = self.stride
+        dL = self.dilation
+        pL = self.padding
+        L_out = _L_out(L, pL, dL, kL, sL)
+        _logger.debug(
+            "Conv1D forward: X.shape=%s, W.shape=%s, b.shape=%s, kernel_size=%s, "
+            "stride=%s, padding=%s, dilation=%s, L_out=%d",
+            X.shape, self.W.shape, getattr(self.b, "shape", None),
+            self.kernel_size, self.stride, self.padding, self.dilation, L_out
+        )
+        cols = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        Z = (self.W @ cols)
+        if self.use_bias:
+            Z += self.b.unsqueeze(0).unsqueeze(2)
+        Z = Z.reshape(B, self.out_channels, L_out)
+        _logger.debug("Conv1D forward: out.shape=%s", getattr(Z, "shape", None))
+        return Z
+
+def _max_reduce_axis2(X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    """Reduce by max over axis=2 for tensors shaped (B, C, K, P)."""
+    idx = np.argmax(X, axis=2)  # (B, C, P)
+    out = np.take_along_axis(X, idx[:, :, None, :], axis=2).squeeze(2)  # (B, C, P)
+    _update_ctx(context, idx=idx)
+    return out
+
+@_shape_safe_grad
+def _max_reduce_axis2_grad(
+    upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None
+) -> tuple[np.ndarray]:
+    idx = (context if context is not None else {}).get("idx")
+    if idx is None:
+        idx = np.argmax(X, axis=2)
+    grad = np.zeros_like(X)
+    np.put_along_axis(grad, idx[:, :, None, :], upstream_grad[:, :, None, :], axis=2)
+    return (grad,)
+
+class MaxPool2D(Layer):
+    """2D max pooling via unfold + max-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = self._pair(kernel_size)
+        self.stride = self._pair(stride)
+        self.padding = self._pair(padding)
+        self.dilation = self._pair(dilation)
+        self.pad_with = float(pad_with)
+
+    @staticmethod
+    def _pair(v: int | tuple[int, int]) -> tuple[int, int]:
+        if isinstance(v, int):
+            return (v, v)
+        if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
+            return v
+        raise TypeError(f"Expected int or tuple[int, int], got {v!r}")
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 4:
+            raise ValueError(f"MaxPool2D expects input of shape (B, C, H, W), got {X.shape}")
+        B, C, H, W = X.shape
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        pH, pW = self.padding
+        dH, dW = self.dilation
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        U = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, kH * kW, H_out * W_out)
+        Y = TensorValuedFunction(_max_reduce_axis2, _max_reduce_axis2_grad)(U)
+        return Y.reshape(B, C, H_out, W_out)
+
+class MeanPool2D(Layer):
+    """2D mean pooling via unfold + mean-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = MaxPool2D._pair(kernel_size)
+        self.stride = MaxPool2D._pair(stride)
+        self.padding = MaxPool2D._pair(padding)
+        self.dilation = MaxPool2D._pair(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 4:
+            raise ValueError(f"MeanPool2D expects input of shape (B, C, H, W), got {X.shape}")
+        B, C, H, W = X.shape
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        pH, pW = self.padding
+        dH, dW = self.dilation
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        U = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, kH * kW, H_out * W_out)
+        Y = general_math.mean(U, axis=2)
+        return Y.reshape(B, C, H_out, W_out)
+
+class MaxPool1D(Layer):
+    """1D max pooling via unfold + max-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = int(kernel_size)
+        self.stride = int(stride)
+        self.padding = int(padding)
+        self.dilation = int(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 3:
+            raise ValueError(f"MaxPool1D expects input of shape (B, C, L), got {X.shape}")
+        B, C, L = X.shape
+        L_out = _L_out(L, self.padding, self.dilation, self.kernel_size, self.stride)
+        U = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, self.kernel_size, L_out)
+        Y = TensorValuedFunction(_max_reduce_axis2, _max_reduce_axis2_grad)(U)
+        return Y.reshape(B, C, L_out)
+
+class MeanPool1D(Layer):
+    """1D mean pooling via unfold + mean-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = int(kernel_size)
+        self.stride = int(stride)
+        self.padding = int(padding)
+        self.dilation = int(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 3:
+            raise ValueError(f"MeanPool1D expects input of shape (B, C, L), got {X.shape}")
+        B, C, L = X.shape
+        L_out = _L_out(L, self.padding, self.dilation, self.kernel_size, self.stride)
+        U = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, self.kernel_size, L_out)
+        Y = general_math.mean(U, axis=2)
+        return Y.reshape(B, C, L_out)
+
 
 __all__ = [
     "xavier_glorot_normal",
+    "calculate_gain",
+    "kaiming_normal",
     "Layer",
     "Affine",
     "Dropout",
     "BatchNorm1d",
-    "Embedding"
+    "BatchNorm2d",
+    "LayerNorm1d",
+    "Embedding",
+    "unfold2d",
+    "unfold1d",
+    "Conv2D",
+    "Conv1D",
+    "MaxPool2D",
+    "MeanPool2D",
+    "MaxPool1D",
+    "MeanPool1D",
 ]
 
 if __name__ == "__main__":

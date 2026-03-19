@@ -37,8 +37,8 @@ The only runtime deps are: `numpy`, `zarr`
 
 ## v1.2.9 — What’s new
 - **New layers:**
-  - Conv1D: **IMPLEMENTATION PENDING**
-  - Conv2D: **IMPLEMENTATION PENDING**
+  - Conv1D: Added unfold+matmul 1D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
+  - Conv2D: Added unfold+matmul 2D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
   - MeanPool1D: **IMPLEMENTATION PENDING**
   - MaxPool1D: **IMPLEMENTATION PENDING**
   - AdaPool1D: **IMPLEMENTATION PENDING**

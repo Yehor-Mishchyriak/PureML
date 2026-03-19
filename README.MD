@@ -39,12 +39,11 @@ The only runtime deps are: `numpy`, `zarr`
 - **New layers:**
   - Conv1D: Added unfold+matmul 1D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
   - Conv2D: Added unfold+matmul 2D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
-  - MeanPool1D: **IMPLEMENTATION PENDING**
-  - MaxPool1D: **IMPLEMENTATION PENDING**
-  - AdaPool1D: **IMPLEMENTATION PENDING**
-  - MeanPool2D: **IMPLEMENTATION PENDING**
-  - MaxPool2D: **IMPLEMENTATION PENDING**
-  - AdaPool2D: **IMPLEMENTATION PENDING**
+  - MeanPool1D: Added unfold+reduce 1D average pooling (`mean` over local windows) with stride/padding/dilation and autograd support.
+  - MaxPool1D: Added unfold+reduce 1D max pooling with argmax-routed backward pass, including overlap-safe gradient accumulation.
+  - MeanPool2D: Added unfold+reduce 2D average pooling (`mean` over local windows) with stride/padding/dilation and autograd support.
+  - MaxPool2D: Added unfold+reduce 2D max pooling with argmax-routed backward pass, including overlap-safe gradient accumulation.
+  - BatchNorm2d: Added channel-wise normalization for NCHW tensors by flattening spatial positions (`B*H*W`) per channel, with running-stat persistence and `apply_state` support.
   - LayerNorm1d: Added normalization over the last feature axis with learnable `gamma`/`beta`, optional bias, and full state persistence (`eps`/`use_bias`).
 - **Clear development protocols:**
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.

@@ -217,6 +217,30 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Checkpointing support includes both trainables and layer config via `.named_buffers()` / `.apply_state()`.
   - Use when data has two spatial axes (images, spectrogram-like feature maps).
 
+- **MaxPool1D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 1D max pooling.  
+  - Expects input shape `(B, C, L)` and returns `(B, C, L_out)`.  
+  - Output length: `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`.  
+  - Use to downsample 1D feature maps while keeping the strongest local response.
+
+- **MeanPool1D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 1D average pooling.  
+  - Expects input shape `(B, C, L)` and returns `(B, C, L_out)` using the same output formula as MaxPool1D.  
+  - Use for smoother downsampling in 1D pipelines.
+
+- **MaxPool2D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 2D max pooling.  
+  - Expects input shape `(B, C, H, W)` and returns `(B, C, H_out, W_out)`.  
+  - Output size:
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - Use to reduce spatial resolution and add local translation tolerance in CNN blocks.
+
+- **MeanPool2D(kernel_size, stride=1, padding=0, dilation=1, pad_with=0.0, training=True)**  
+  - 2D average pooling.  
+  - Expects input shape `(B, C, H, W)` and returns `(B, C, H_out, W_out)` with the same output formulas as MaxPool2D.  
+  - Use when you want downsampling with less emphasis on isolated peaks.
+
 - **Dropout(p=0.5, seed=None, training=True)**  
   - Inverted dropout for 1D/2D inputs.  
   - `p`: drop probability in [0,1]; `seed`: reproducible masks; `training`: initial mode.  
@@ -228,6 +252,12 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - `momentum`: EMA coefficient for running stats (`running = (1-m)*running + m*batch`).  
   - Optional trainables `gamma`, `beta` (shape `(F,)`); optional buffers to resume `running_mean/variance`.  
   - Training uses batch stats and updates running; eval uses running only.
+
+- **BatchNorm2d(num_features, eps=1e-5, momentum=0.1, gamma=None, beta=None, running_variance=None, running_mean=None, training=True)**  
+  - Channel-wise BatchNorm for NCHW tensors `(B, C, H, W)`.  
+  - `num_features` is the channel count `C`.  
+  - Uses the same behavior and checkpoint semantics as BatchNorm1d (train uses current-batch stats, eval uses running stats).  
+  - Recommended normalization layer in convolutional blocks.
 
 - **LayerNorm1d(num_features, gamma=None, beta=None, eps=1e-5, bias=True, training=True)**  
   - Normalizes across the **last axis** (feature axis), so input must end with `num_features` (e.g. `(B, F)` or `(B, T, F)`).  

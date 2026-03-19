@@ -2282,58 +2282,6 @@ class MeanPool1D(Layer):
 class AdaPool1D(Layer):
     pass
 
-# *----------------------------------------------------*
-#                    RNN CORE LAYERS
-# *----------------------------------------------------*
-
-class RNNCell(Layer):
-    # some of my thoughts on the RNNs:
-    # since we cannot process intro-sequence samples in parallel
-    # -- only sequentially -- I was thinking about the following:
-    # what if we use shared memory and load the batches into it
-    # and then split the batch into k chunks -- 1 chunk per worker --
-    # and then simply use multiprocessing with ProcessPoolExecutor.
-    # We might need to use threadpoolctl though to avoid oversubscribing the CPU.
-
-    # On a different point:
-    # as for the cell's architecture, I am thinking about letting the user either pass in
-    # NN objects for 1) R: x -> g, 2) W: (h, g) -> h, 3) U: h -> y networks or override the corresponding
-    # methods of the class if they subclass from the RNNCell.
-    # Then, this class will simply be an orhestrator in the sequence processeing task, properly
-    # applying the R, W, U networks to sequences.
-    # I reckon this is a good approach because then trailing dimensions of data samples can
-    # be arbitrary: [B, T, ...] -- while the Batch and Token dims are of course required to be leading.
-    pass
-
-class LSTMCell(Layer):
-    # Same thoughts on parallelism as for vanilla RNNCell's apply here.
-    # NOTE: that's not an easy operation:
-    # in order for us to avoid constantly pickling model weights and loading
-    # them into processes we must keep them in the shared memory instance as well
-    # and then update the buffer with gradient optimization. We will then write from
-    # the SHAM back into the model in RAM. So some level of IPC will be required,
-    # which means it'll pretty challenging.
-
-    # As for the class organization, again, the same as for the RNNCell, but now
-    # also passing in or overriding things like forget gate, input gate, etc.
-    pass
-
-# *----------------------------------------------------*
-#                     Self-attention
-# *----------------------------------------------------*
-
-class Attention(Layer):
-    pass
-
-# *----------------------------------------------------*
-#                     Miscellaneous
-# *----------------------------------------------------*
-
-class Sequential(Layer):
-    pass
-
-# *----------------------------------------------------*
-
 
 __all__ = [
     "xavier_glorot_normal",

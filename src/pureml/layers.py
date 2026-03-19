@@ -1978,7 +1978,7 @@ class Conv2D(Layer):
         cols = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
         Z = (self.W @ cols)
         if self.use_bias:
-            Z += self.b.unsqueeze(1)
+            Z += self.b.unsqueeze(0).unsqueeze(2)
         Z = Z.reshape(B, self.out_channels, H_out, W_out)
         _logger.debug("Conv2D forward: out.shape=%s", getattr(Z, "shape", None))
         return Z
@@ -2259,7 +2259,7 @@ class Conv1D(Layer):
         cols = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
         Z = (self.W @ cols)
         if self.use_bias:
-            Z += self.b.unsqueeze(1)
+            Z += self.b.unsqueeze(0).unsqueeze(2)
         Z = Z.reshape(B, self.out_channels, L_out)
         _logger.debug("Conv1D forward: out.shape=%s", getattr(Z, "shape", None))
         return Z

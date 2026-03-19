@@ -6,7 +6,7 @@ import numpy as np
 from pureml.machinery import Tensor
 from pureml.layers import (
     Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding,
-    Conv1D, Conv2D, MaxPool1D, MeanPool1D, MaxPool2D, MeanPool2D,
+    Conv1D, Conv2D, MaxPool1D, MeanPool1D, MaxPool2D, MeanPool2D, BatchNorm2d,
     unfold1d, unfold2d
 )
 from pureml.general_math import mean
@@ -681,6 +681,90 @@ class TestBatchNorm1d(ut.TestCase):
 
         with self.assertRaises(ValueError):
             bn.apply_state(buffers={"num_features": np.asarray(F + 1, dtype=np.int64)})
+
+
+class TestBatchNorm2d(ut.TestCase):
+    def test_forward_matches_manual_formula_in_train(self):
+        B, C, H, W = 3, 4, 5, 6
+        rng = _rng(514)
+        X_np = rng.standard_normal((B, C, H, W))
+        X = Tensor(X_np, requires_grad=False)
+        bn = BatchNorm2d(C, eps=1e-5, momentum=0.2).train()
+
+        Y = bn(X).data
+        X_flat = np.transpose(X_np, (0, 2, 3, 1)).reshape(B * H * W, C)
+        mu = X_flat.mean(axis=0)
+        var = ((X_flat - mu) ** 2).mean(axis=0)
+        Y_flat = (X_flat - mu) / np.sqrt(var + float(bn.eps.data))
+        Y_flat = Y_flat * bn.gamma.data + bn.beta.data
+        expected = np.transpose(Y_flat.reshape(B, H, W, C), (0, 3, 1, 2))
+
+        self.assertEqual(Y.shape, (B, C, H, W))
+        np.testing.assert_allclose(Y, expected, rtol=1e-6, atol=1e-8)
+
+    def test_running_stats_update_and_eval_freeze(self):
+        B, C, H, W = 2, 3, 4, 4
+        rng = _rng(515)
+        bn = BatchNorm2d(C, momentum=0.1).train()
+
+        _ = bn(Tensor(rng.standard_normal((B, C, H, W))))
+        rm_before = bn.running_mean.data.copy()
+        rv_before = bn.running_variance.data.copy()
+        self.assertTrue(np.all(np.isfinite(rm_before)))
+        self.assertTrue(np.all(np.isfinite(rv_before)))
+
+        bn.eval()
+        _ = bn(Tensor(rng.standard_normal((B, C, H, W))))
+        np.testing.assert_allclose(bn.running_mean.data, rm_before, rtol=0, atol=0)
+        np.testing.assert_allclose(bn.running_variance.data, rv_before, rtol=0, atol=0)
+
+    def test_backward_shape_and_apply_state(self):
+        B, C, H, W = 2, 5, 3, 3
+        rng = _rng(516)
+        bn = BatchNorm2d(C).train()
+        X = Tensor(rng.standard_normal((B, C, H, W)), requires_grad=True)
+        Y = bn(X)
+        L = mean(Y * Y)
+        L.backward()
+
+        self.assertIsNotNone(X.grad)
+        self.assertEqual(X.grad.shape, X.shape)
+        self.assertIsNotNone(bn.gamma.grad)
+        self.assertIsNotNone(bn.beta.grad)
+
+        gamma_new = rng.standard_normal((C,))
+        beta_new = rng.standard_normal((C,))
+        bn.apply_state(
+            tunable=(gamma_new, beta_new),
+            buffers={
+                "momentum": np.asarray(0.33, dtype=np.float64),
+                "training": np.asarray(0, dtype=np.int8),
+                "num_features": np.asarray(C, dtype=np.int64),
+            },
+        )
+        np.testing.assert_allclose(bn.gamma.data, gamma_new, rtol=0, atol=0)
+        np.testing.assert_allclose(bn.beta.data, beta_new, rtol=0, atol=0)
+        self.assertAlmostEqual(float(bn.momentum), 0.33, places=12)
+        self.assertFalse(bn.training)
+
+        with self.assertRaises(ValueError):
+            bn.apply_state(buffers={"num_features": np.asarray(C + 1, dtype=np.int64)})
+
+    def test_input_validation_and_buffer_contract(self):
+        bn = BatchNorm2d(3)
+        self.assertEqual(len(bn.parameters), 2)
+        bufs = bn.named_buffers()
+        self.assertIn("running_mean", bufs)
+        self.assertIn("running_variance", bufs)
+        self.assertIn("eps", bufs)
+        self.assertIn("momentum", bufs)
+        self.assertIn("training", bufs)
+        self.assertIn("num_features", bufs)
+
+        with self.assertRaises(ValueError):
+            _ = bn(Tensor(np.zeros((2, 3, 4))))      # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = bn(Tensor(np.zeros((2, 2, 4, 4))))   # channel mismatch
 
 
 # --------------------------- LayerNorm1d ---------------------------

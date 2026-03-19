@@ -1714,28 +1714,28 @@ class Conv2D(Layer):
         dilation: int | tuple[int, int] = 1,
         use_bias: bool = True,
         pad_with: float = 0.0,
+        W: Tensor | None = None,
+        b: Tensor | None = None,
         *,
-        method: Literal["kaiming_normal"] = "kaiming_normal",
+        method: _weight_init_funcs_type = "kaiming-normal",
+        nonlinearity: _nonlinearity_types = "relu",
         training: bool = True,
         seed: int | None = None):
-
-        """
-        `kernel_size`, `stride`, `padding`, `dilation` can either be:
-            1) int, in which case the same value is used for the height and width dimension; OR
-            2) tuple[int, int], in which case, the first int is used for the height dimension, and the second int for the width dimension.
-        """
 
         super().__init__(training=training)
 
         self.method = method
+        self.nonlinearity = nonlinearity
         self._rng, self.seed = rng_from_seed(seed)
         self.use_bias = bool(use_bias)
 
         try:
-            init_fn = {"kaiming_normal": kaiming_normal}[method]
+            init_fn = _weight_init_funcs[method]
         except KeyError as e:
             raise ValueError(f"Unknown init method '{method}'") from e
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.kernel_size = self._pair(kernel_size)
         self.stride = self._pair(stride)
         self.padding = self._pair(padding)
@@ -1743,16 +1743,180 @@ class Conv2D(Layer):
         self.pad_with = pad_with
 
         # trainable parameters
-        self.kernels: list[Tensor] = [
-                init_fn(in_channels, out_channels, kernel_size)
-                for _ in range(out_channels)
-            ]
+        fan_in = self.in_channels * self.kernel_size[0] * self.kernel_size[1]
+        init_kwargs = {"rng": self._rng}
+        if method == "kaiming-normal":
+            init_kwargs["nonlinearity"] = nonlinearity
+
+        W_init = b_init = None
+        if (W is None) or (self.use_bias and b is None):
+            W_init, b_init = init_fn(fan_in, out_channels, **init_kwargs)
+
+        # W accepts either (out_channels, fan_in) or (fan_in, out_channels)
+        if W is None:
+            self.W = W_init
+        else:
+            if W.shape == (out_channels, fan_in):
+                self.W = W
+            elif W.shape == (fan_in, out_channels):
+                self.W = Tensor(W.data.T, requires_grad=True)
+            else:
+                raise ValueError(
+                    f"Incompatible W shape {W.shape}; expected {(out_channels, fan_in)} "
+                    f"or {(fan_in, out_channels)}"
+                )
+        self.W.requires_grad = True
+
+        if not self.use_bias:
+            if b is not None:
+                raise ValueError("Received 'b' but use_bias=False. Either pass use_bias=True or drop 'b'.")
+            self.b = Tensor(np.zeros((out_channels,), dtype=self.W.dtype), requires_grad=False)
+        else:
+            if b is None:
+                self.b = b_init
+            else:
+                if b.shape != (out_channels,):
+                    raise ValueError(f"Incompatible b shape {b.shape}; expected {(out_channels,)}")
+                self.b = b
+            self.b.requires_grad = True
     
     @staticmethod
     def _pair(v: int | tuple[int, int]):
         if isinstance(v, int):
             return (v, v)
         return v
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        if self.use_bias:
+            return (self.W, self.b)
+        return (self.W,)
+
+    def named_buffers(self) -> dict[str, np.ndarray]:
+        seed_val = 0 if self.seed is None else self.seed
+        return {
+            "method": np.array(self.method.encode("utf-8"), dtype=np.bytes_),
+            "nonlinearity": np.array(self.nonlinearity.encode("utf-8"), dtype=np.bytes_),
+            "seed": np.asarray(seed_val, dtype=np.uint64),
+            "use_bias": np.asarray(int(self.use_bias), dtype=np.int8),
+            "in_channels": np.asarray(int(self.in_channels), dtype=np.int64),
+            "out_channels": np.asarray(int(self.out_channels), dtype=np.int64),
+            "kernel_size": np.asarray(self.kernel_size, dtype=np.int64),
+            "stride": np.asarray(self.stride, dtype=np.int64),
+            "padding": np.asarray(self.padding, dtype=np.int64),
+            "dilation": np.asarray(self.dilation, dtype=np.int64),
+            "pad_with": np.asarray(float(self.pad_with), dtype=np.float64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+        }
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        self._validate_contract()
+
+        if buffers:
+            def _decode_text(val) -> str:
+                if isinstance(val, np.ndarray):
+                    val = val.item()
+                if isinstance(val, (bytes, bytearray)):
+                    val = val.decode("utf-8", "ignore")
+                return str(val)
+
+            # immutable shape/config guards
+            if "in_channels" in buffers and buffers["in_channels"] is not None:
+                got = int(np.asarray(buffers["in_channels"]).item())
+                if got != self.in_channels:
+                    raise ValueError(f"Conv2D in_channels mismatch: checkpoint={got}, layer={self.in_channels}")
+            if "out_channels" in buffers and buffers["out_channels"] is not None:
+                got = int(np.asarray(buffers["out_channels"]).item())
+                if got != self.out_channels:
+                    raise ValueError(f"Conv2D out_channels mismatch: checkpoint={got}, layer={self.out_channels}")
+            if "kernel_size" in buffers and buffers["kernel_size"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["kernel_size"]).reshape(-1))
+                if got != self.kernel_size:
+                    raise ValueError(f"Conv2D kernel_size mismatch: checkpoint={got}, layer={self.kernel_size}")
+            if "stride" in buffers and buffers["stride"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["stride"]).reshape(-1))
+                if got != self.stride:
+                    raise ValueError(f"Conv2D stride mismatch: checkpoint={got}, layer={self.stride}")
+            if "padding" in buffers and buffers["padding"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["padding"]).reshape(-1))
+                if got != self.padding:
+                    raise ValueError(f"Conv2D padding mismatch: checkpoint={got}, layer={self.padding}")
+            if "dilation" in buffers and buffers["dilation"] is not None:
+                got = tuple(int(x) for x in np.asarray(buffers["dilation"]).reshape(-1))
+                if got != self.dilation:
+                    raise ValueError(f"Conv2D dilation mismatch: checkpoint={got}, layer={self.dilation}")
+
+            if "use_bias" in buffers and buffers["use_bias"] is not None:
+                prev = self.use_bias
+                self.use_bias = bool(int(np.asarray(buffers["use_bias"]).item()))
+                if not self.use_bias:
+                    self.b.data[...] = 0.0
+                    self.b.requires_grad = False
+                elif not prev:
+                    self.b.requires_grad = True
+
+            if "seed" in buffers and buffers["seed"] is not None:
+                seed_val = int(np.asarray(buffers["seed"]).item())
+                self.seed = seed_val
+                self._rng, _ = rng_from_seed(seed_val)
+
+            if "method" in buffers and buffers["method"] is not None:
+                self.method = _decode_text(buffers["method"])
+
+            if "nonlinearity" in buffers and buffers["nonlinearity"] is not None:
+                self.nonlinearity = _decode_text(buffers["nonlinearity"])
+
+            if "pad_with" in buffers and buffers["pad_with"] is not None:
+                self.pad_with = float(np.asarray(buffers["pad_with"]).item())
+
+            if "training" in buffers and buffers["training"] is not None:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+
+        if tunable:
+            expected = 2 if self.use_bias else 1
+            if len(tunable) != expected:
+                raise ValueError(
+                    f"Conv2D.apply_state expected {expected} arrays "
+                    f"(W{', b' if self.use_bias else ''}); got {len(tunable)}"
+                )
+
+            W_arr = np.asarray(tunable[0])
+            o, ck = self.W.data.shape
+            if W_arr.shape == (o, ck):
+                self.W.data = W_arr.astype(self.W.data.dtype, copy=False)
+            elif W_arr.shape == (ck, o):
+                self.W.data = W_arr.T.astype(self.W.data.dtype, copy=False)
+            else:
+                raise ValueError(f"Incompatible W shape {W_arr.shape}; expected {(o, ck)} or {(ck, o)}")
+
+            if self.use_bias:
+                b_arr = np.asarray(tunable[1])
+                if b_arr.shape != self.b.data.shape:
+                    raise ValueError(f"Incompatible b shape {b_arr.shape}; expected {self.b.data.shape}")
+                self.b.data = b_arr.astype(self.b.data.dtype, copy=False)
+    
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 4:
+            raise ValueError(f"Conv2D expects input of shape (B, C, H, W), got {X.shape}")
+
+        B, C, H, W = X.shape
+        if C != self.in_channels:
+            raise ValueError(
+                f"Conv2D expected {self.in_channels} input channels, got {C} "
+                f"(input shape {X.shape})"
+            )
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        dH, dW = self.dilation
+        pH, pW = self.padding
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        cols = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        Z = (self.W @ cols)
+        if self.use_bias:
+            Z += self.b.unsqueeze(1)
+        Z = Z.reshape(B, self.out_channels, H_out, W_out)
+        return Z
 
 class Conv1D(Layer):
     pass

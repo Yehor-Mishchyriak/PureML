@@ -4,7 +4,7 @@ import numpy as np
 
 # Public API
 from pureml.machinery import Tensor
-from pureml.layers import Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, unfold1d, unfold2d
+from pureml.layers import Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, Conv1D, Conv2D, unfold1d, unfold2d
 from pureml.general_math import mean
 
 def _rng(seed=0):
@@ -129,6 +129,63 @@ def _manual_fold2d_grad(
                             w_idx = ow * sW + kw * dW
                             gpad[b, c, h_idx, w_idx] += upstream_grad[b, r, p]
     return gpad[:, :, pH:pH+H, pW:pW+W]
+
+
+def _manual_conv1d(
+        X: np.ndarray,
+        W: np.ndarray,
+        b: np.ndarray | None,
+        *,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0) -> np.ndarray:
+    cols = _manual_unfold1d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kL, L_out)
+    Z = np.matmul(W, cols)  # (B, O, L_out)
+    if b is not None:
+        Z = Z + b[None, :, None]
+    return Z
+
+
+def _manual_conv2d(
+        X: np.ndarray,
+        W: np.ndarray,
+        b: np.ndarray | None,
+        *,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0) -> np.ndarray:
+    B, _, H, W_in = X.shape
+    kH, kW = kernel_size
+    sH, sW = stride
+    pH, pW = padding
+    dH, dW = dilation
+
+    H_out = int(np.floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1)
+    W_out = int(np.floor((W_in + 2*pW - dW*(kW - 1) - 1) / sW) + 1)
+
+    cols = _manual_unfold2d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kH*kW, H_out*W_out)
+    Z = np.matmul(W, cols)  # (B, O, H_out*W_out)
+    if b is not None:
+        Z = Z + b[None, :, None]
+    return Z.reshape(B, W.shape[0], H_out, W_out)
 
 class _ToyLayer(Layer):
     def __init__(self):
@@ -809,6 +866,325 @@ class TestEmbedding(ut.TestCase):
             emb.apply_state(tunable=(np.zeros((D, V)),))  # wrong shape
         with self.assertRaises(ValueError):
             emb.apply_state(tunable=(np.zeros((V, D)), np.zeros((V, D))))  # too many arrays
+
+
+class TestConv1D(ut.TestCase):
+    def test_forward_matches_manual_reference_with_bias(self):
+        B, C, L = 2, 3, 9
+        O = 4
+        kL, sL, pL, dL = 3, 2, 1, 1
+        rng = _rng(300)
+
+        conv = Conv1D(C, O, kL, stride=sL, padding=pL, dilation=dL, use_bias=True, seed=7)
+        X_np = rng.standard_normal((B, C, L))
+        X = Tensor(X_np, requires_grad=False)
+
+        Y = conv(X)
+        Y_ref = _manual_conv1d(
+            X_np, conv.W.data, conv.b.data,
+            kernel_size=kL, stride=sL, padding=pL, dilation=dL, pad_with=conv.pad_with
+        )
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_forward_matches_manual_reference_without_bias(self):
+        B, C, L = 2, 2, 8
+        O = 3
+        kL = 3
+        rng = _rng(301)
+
+        conv = Conv1D(C, O, kL, use_bias=False, seed=11)
+        X_np = rng.standard_normal((B, C, L))
+        X = Tensor(X_np, requires_grad=False)
+        Y = conv(X)
+
+        Y_ref = _manual_conv1d(
+            X_np, conv.W.data, None,
+            kernel_size=kL, stride=1, padding=0, dilation=1, pad_with=conv.pad_with
+        )
+        self.assertEqual(len(conv.parameters), 1)
+        self.assertFalse(conv.b.requires_grad)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_input_validation_errors(self):
+        conv = Conv1D(2, 3, 3)
+        with self.assertRaises(ValueError):
+            _ = conv(Tensor(np.zeros((2, 2, 5, 1))))  # wrong ndim
+        with self.assertRaises(ValueError):
+            _ = conv(Tensor(np.zeros((2, 1, 5))))     # wrong channels
+
+    def test_seeded_reproducibility_and_named_buffers(self):
+        c1 = Conv1D(3, 4, 5, stride=2, padding=1, dilation=2, seed=2026)
+        c2 = Conv1D(3, 4, 5, stride=2, padding=1, dilation=2, seed=2026)
+        np.testing.assert_allclose(c1.W.data, c2.W.data, rtol=0, atol=0)
+        np.testing.assert_allclose(c1.b.data, c2.b.data, rtol=0, atol=0)
+
+        bufs = c1.named_buffers()
+        self.assertEqual(int(bufs["seed"].item()), 2026)
+        self.assertEqual(_decode_method_buf(bufs["method"]), c1.method)
+        self.assertEqual(_decode_method_buf(bufs["nonlinearity"]), c1.nonlinearity)
+        self.assertEqual(int(bufs["kernel_size"].item()), 5)
+        self.assertEqual(int(bufs["stride"].item()), 2)
+        self.assertEqual(int(bufs["padding"].item()), 1)
+        self.assertEqual(int(bufs["dilation"].item()), 2)
+
+    def test_init_accepts_preinitialized_W_and_b_and_transposed_W(self):
+        C, O, kL = 2, 3, 4
+        fan_in = C * kL
+        W_ok = Tensor(_rng(302).standard_normal((O, fan_in)), requires_grad=True)
+        b_ok = Tensor(_rng(303).standard_normal((O,)), requires_grad=True)
+        c = Conv1D(C, O, kL, W=W_ok, b=b_ok, use_bias=True)
+        np.testing.assert_allclose(c.W.data, W_ok.data, rtol=0, atol=0)
+        np.testing.assert_allclose(c.b.data, b_ok.data, rtol=0, atol=0)
+
+        W_t = Tensor(_rng(304).standard_normal((fan_in, O)), requires_grad=True)
+        c2 = Conv1D(C, O, kL, W=W_t, use_bias=False)
+        np.testing.assert_allclose(c2.W.data, W_t.data.T, rtol=0, atol=0)
+
+        with self.assertRaises(ValueError):
+            _ = Conv1D(C, O, kL, W=Tensor(np.zeros((O + 1, fan_in))))
+        with self.assertRaises(ValueError):
+            _ = Conv1D(C, O, kL, b=Tensor(np.zeros((O + 1,))), use_bias=True)
+        with self.assertRaises(ValueError):
+            _ = Conv1D(C, O, kL, b=Tensor(np.zeros((O,))), use_bias=False)
+
+    def test_apply_state_roundtrip_and_bias_toggle(self):
+        C, O, kL = 2, 3, 3
+        c = Conv1D(C, O, kL, seed=0)
+
+        W_new = _rng(305).standard_normal(c.W.data.shape)
+        b_new = _rng(306).standard_normal(c.b.data.shape)
+        c.apply_state(tunable=(W_new, b_new))
+        np.testing.assert_allclose(c.W.data, W_new, rtol=0, atol=0)
+        np.testing.assert_allclose(c.b.data, b_new, rtol=0, atol=0)
+
+        c.apply_state(buffers={"use_bias": np.asarray(0, dtype=np.int8)})
+        self.assertFalse(c.use_bias)
+        self.assertEqual(len(c.parameters), 1)
+        self.assertFalse(c.b.requires_grad)
+        np.testing.assert_allclose(c.b.data, np.zeros_like(c.b.data), rtol=0, atol=0)
+
+        c.apply_state(tunable=(W_new,))
+        np.testing.assert_allclose(c.W.data, W_new, rtol=0, atol=0)
+        with self.assertRaises(ValueError):
+            c.apply_state(tunable=(W_new, b_new))
+
+        c.apply_state(buffers={"use_bias": np.asarray(1, dtype=np.int8)})
+        self.assertTrue(c.use_bias)
+        self.assertTrue(c.b.requires_grad)
+        c.apply_state(tunable=(W_new, b_new))
+
+    def test_backward_grads_match_manual_for_W_and_b(self):
+        B, C, L = 2, 2, 7
+        O = 3
+        kL, sL, pL, dL = 3, 2, 1, 1
+        rng = _rng(307)
+        conv = Conv1D(C, O, kL, stride=sL, padding=pL, dilation=dL, use_bias=True, seed=5)
+        X_np = rng.standard_normal((B, C, L))
+        X = Tensor(X_np, requires_grad=True)
+        Y = conv(X)  # (B, O, L_out)
+
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        cols = _manual_unfold1d(X_np, kL, sL, pL, dL, pad_with=conv.pad_with)
+        dW_expected = np.einsum("bop,bcp->oc", U, cols)
+        db_expected = U.sum(axis=(0, 2))
+        np.testing.assert_allclose(conv.W.grad, dW_expected, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(conv.b.grad, db_expected, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_finite_difference(self):
+        B, C, L = 1, 1, 5
+        O = 2
+        kL = 3
+        rng = _rng(308)
+        conv = Conv1D(C, O, kL, seed=13)
+        X0 = rng.standard_normal((B, C, L)).astype(np.float64)
+        U = rng.standard_normal(conv(Tensor(X0)).data.shape).astype(np.float64)
+
+        X = Tensor(X0.copy(), requires_grad=True)
+        Y = conv(X)
+        Y.backward(U)
+        g_auto = X.grad.copy()
+
+        eps = 1e-6
+        g_num = np.zeros_like(X0)
+
+        def obj(x_arr: np.ndarray) -> float:
+            y = conv(Tensor(x_arr, requires_grad=False)).data
+            return float(np.sum(y * U))
+
+        for idx in np.ndindex(X0.shape):
+            x_p = X0.copy()
+            x_m = X0.copy()
+            x_p[idx] += eps
+            x_m[idx] -= eps
+            g_num[idx] = (obj(x_p) - obj(x_m)) / (2.0 * eps)
+
+        np.testing.assert_allclose(g_auto, g_num, rtol=1e-5, atol=1e-6)
+
+
+class TestConv2D(ut.TestCase):
+    def test_forward_matches_manual_reference_with_bias(self):
+        B, C, H, W = 2, 2, 6, 7
+        O = 3
+        k = (3, 2)
+        s = (2, 1)
+        p = (1, 1)
+        d = (1, 1)
+        rng = _rng(400)
+
+        conv = Conv2D(C, O, k, stride=s, padding=p, dilation=d, use_bias=True, seed=17)
+        X_np = rng.standard_normal((B, C, H, W))
+        X = Tensor(X_np, requires_grad=False)
+        Y = conv(X)
+
+        Y_ref = _manual_conv2d(
+            X_np, conv.W.data, conv.b.data,
+            kernel_size=k, stride=s, padding=p, dilation=d, pad_with=conv.pad_with
+        )
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_forward_matches_manual_reference_without_bias(self):
+        B, C, H, W = 2, 1, 5, 5
+        O = 4
+        k = (2, 2)
+        rng = _rng(401)
+        conv = Conv2D(C, O, k, use_bias=False, seed=19)
+
+        X_np = rng.standard_normal((B, C, H, W))
+        Y = conv(Tensor(X_np, requires_grad=False))
+        Y_ref = _manual_conv2d(
+            X_np, conv.W.data, None,
+            kernel_size=k, stride=(1, 1), padding=(0, 0), dilation=(1, 1), pad_with=conv.pad_with
+        )
+        self.assertEqual(len(conv.parameters), 1)
+        self.assertFalse(conv.b.requires_grad)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_input_validation_errors(self):
+        conv = Conv2D(2, 3, (3, 3))
+        with self.assertRaises(ValueError):
+            _ = conv(Tensor(np.zeros((2, 2, 5))))     # wrong ndim
+        with self.assertRaises(ValueError):
+            _ = conv(Tensor(np.zeros((2, 1, 5, 5))))  # wrong channels
+
+    def test_seeded_reproducibility_and_named_buffers(self):
+        c1 = Conv2D(3, 4, (3, 5), stride=(2, 1), padding=(1, 2), dilation=(2, 1), seed=2027)
+        c2 = Conv2D(3, 4, (3, 5), stride=(2, 1), padding=(1, 2), dilation=(2, 1), seed=2027)
+        np.testing.assert_allclose(c1.W.data, c2.W.data, rtol=0, atol=0)
+        np.testing.assert_allclose(c1.b.data, c2.b.data, rtol=0, atol=0)
+
+        bufs = c1.named_buffers()
+        self.assertEqual(int(bufs["seed"].item()), 2027)
+        self.assertEqual(_decode_method_buf(bufs["method"]), c1.method)
+        self.assertEqual(_decode_method_buf(bufs["nonlinearity"]), c1.nonlinearity)
+        np.testing.assert_array_equal(bufs["kernel_size"], np.asarray((3, 5), dtype=np.int64))
+        np.testing.assert_array_equal(bufs["stride"], np.asarray((2, 1), dtype=np.int64))
+        np.testing.assert_array_equal(bufs["padding"], np.asarray((1, 2), dtype=np.int64))
+        np.testing.assert_array_equal(bufs["dilation"], np.asarray((2, 1), dtype=np.int64))
+
+    def test_init_accepts_preinitialized_W_and_b_and_transposed_W(self):
+        C, O = 2, 3
+        k = (2, 2)
+        fan_in = C * k[0] * k[1]
+        W_ok = Tensor(_rng(402).standard_normal((O, fan_in)), requires_grad=True)
+        b_ok = Tensor(_rng(403).standard_normal((O,)), requires_grad=True)
+        c = Conv2D(C, O, k, W=W_ok, b=b_ok, use_bias=True)
+        np.testing.assert_allclose(c.W.data, W_ok.data, rtol=0, atol=0)
+        np.testing.assert_allclose(c.b.data, b_ok.data, rtol=0, atol=0)
+
+        W_t = Tensor(_rng(404).standard_normal((fan_in, O)), requires_grad=True)
+        c2 = Conv2D(C, O, k, W=W_t, use_bias=False)
+        np.testing.assert_allclose(c2.W.data, W_t.data.T, rtol=0, atol=0)
+
+        with self.assertRaises(ValueError):
+            _ = Conv2D(C, O, k, W=Tensor(np.zeros((O + 1, fan_in))))
+        with self.assertRaises(ValueError):
+            _ = Conv2D(C, O, k, b=Tensor(np.zeros((O + 1,))), use_bias=True)
+        with self.assertRaises(ValueError):
+            _ = Conv2D(C, O, k, b=Tensor(np.zeros((O,))), use_bias=False)
+
+    def test_apply_state_roundtrip_and_bias_toggle(self):
+        C, O = 2, 3
+        k = (3, 2)
+        c = Conv2D(C, O, k, seed=0)
+
+        W_new = _rng(405).standard_normal(c.W.data.shape)
+        b_new = _rng(406).standard_normal(c.b.data.shape)
+        c.apply_state(tunable=(W_new, b_new))
+        np.testing.assert_allclose(c.W.data, W_new, rtol=0, atol=0)
+        np.testing.assert_allclose(c.b.data, b_new, rtol=0, atol=0)
+
+        c.apply_state(buffers={"use_bias": np.asarray(0, dtype=np.int8)})
+        self.assertFalse(c.use_bias)
+        self.assertEqual(len(c.parameters), 1)
+        self.assertFalse(c.b.requires_grad)
+        np.testing.assert_allclose(c.b.data, np.zeros_like(c.b.data), rtol=0, atol=0)
+
+        c.apply_state(tunable=(W_new,))
+        with self.assertRaises(ValueError):
+            c.apply_state(tunable=(W_new, b_new))
+
+        c.apply_state(buffers={"use_bias": np.asarray(1, dtype=np.int8)})
+        self.assertTrue(c.use_bias)
+        self.assertTrue(c.b.requires_grad)
+        c.apply_state(tunable=(W_new, b_new))
+
+    def test_backward_grads_match_manual_for_W_and_b(self):
+        B, C, H, W = 2, 2, 6, 5
+        O = 3
+        k = (3, 2)
+        s = (2, 1)
+        p = (1, 1)
+        d = (1, 1)
+        rng = _rng(407)
+        conv = Conv2D(C, O, k, stride=s, padding=p, dilation=d, use_bias=True, seed=3)
+        X_np = rng.standard_normal((B, C, H, W))
+        X = Tensor(X_np, requires_grad=True)
+        Y = conv(X)  # (B, O, H_out, W_out)
+
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        cols = _manual_unfold2d(X_np, k, s, p, d, pad_with=conv.pad_with)  # (B, Ck, P)
+        U_flat = U.reshape(B, O, -1)  # (B, O, P)
+        dW_expected = np.einsum("bop,bcp->oc", U_flat, cols)
+        db_expected = U_flat.sum(axis=(0, 2))
+        np.testing.assert_allclose(conv.W.grad, dW_expected, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(conv.b.grad, db_expected, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_finite_difference(self):
+        B, C, H, W = 1, 1, 4, 4
+        O = 2
+        k = (2, 2)
+        rng = _rng(408)
+        conv = Conv2D(C, O, k, seed=23)
+        X0 = rng.standard_normal((B, C, H, W)).astype(np.float64)
+        U = rng.standard_normal(conv(Tensor(X0)).data.shape).astype(np.float64)
+
+        X = Tensor(X0.copy(), requires_grad=True)
+        Y = conv(X)
+        Y.backward(U)
+        g_auto = X.grad.copy()
+
+        eps = 1e-6
+        g_num = np.zeros_like(X0)
+
+        def obj(x_arr: np.ndarray) -> float:
+            y = conv(Tensor(x_arr, requires_grad=False)).data
+            return float(np.sum(y * U))
+
+        for idx in np.ndindex(X0.shape):
+            x_p = X0.copy()
+            x_m = X0.copy()
+            x_p[idx] += eps
+            x_m[idx] -= eps
+            g_num[idx] = (obj(x_p) - obj(x_m)) / (2.0 * eps)
+
+        np.testing.assert_allclose(g_auto, g_num, rtol=1e-5, atol=1e-6)
+
 
 class TestUnfold(ut.TestCase):
     def test_unfold1d_forward_matches_manual_reference(self):

@@ -74,15 +74,10 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
+_nonlinearity_types = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
+
 def calculate_gain(
-        nonlinearity: Literal[
-                        'Affine',
-                        'Conv1D',
-                        'Conv2D',
-                        "sigmoid",
-                        "tanh",
-                        "relu",
-                        "leaky_relu"],
+        nonlinearity: _nonlinearity_types,
         param: int | float | None):
     """Return the recommended gain for weight initialization.
 
@@ -126,8 +121,6 @@ def calculate_gain(
 
     _logger.error("calculate_gain: unsupported nonlinearity=%s", nonlinearity)
     raise ValueError(f"Unsupported nonlinearity: {nonlinearity}")
-    
-_nonlinearity_types = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
 
 def kaiming_normal(
     fan_in: int,

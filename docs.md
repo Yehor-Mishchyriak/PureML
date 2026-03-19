@@ -197,6 +197,26 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Gradients are always tracked for supplied `W`/`b`.
   - Practical tip: use `"kaiming-normal"` for ReLU/LeakyReLU-heavy MLPs; use Xavier as a general default.
 
+- **Conv1D(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, use_bias=True, pad_with=0.0, W=None, b=None, method="kaiming-normal", nonlinearity="relu", training=True, seed=None)**  
+  - Expects input shape `(B, C, L)` and returns `(B, out_channels, L_out)`.  
+  - Output length: `L_out = floor((L + 2*pL - dL*(kL - 1) - 1) / sL) + 1`.  
+  - `kernel_size`, `stride`, `padding`, `dilation`: int values controlling receptive field and output resolution.  
+  - `W`: optional Tensor shaped `(out_channels, in_channels*kL)` or `(in_channels*kL, out_channels)` (auto-transposed).  
+  - `b`: optional Tensor of shape `(out_channels,)`; if `use_bias=False`, bias is disabled and excluded from `.parameters`.  
+  - Checkpointing support includes both trainables and layer config via `.named_buffers()` / `.apply_state()`.
+  - Use when data has one spatial/temporal axis (signals, token-level feature maps, sensor streams).
+
+- **Conv2D(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, use_bias=True, pad_with=0.0, W=None, b=None, method="kaiming-normal", nonlinearity="relu", training=True, seed=None)**  
+  - Expects input shape `(B, C, H, W)` and returns `(B, out_channels, H_out, W_out)`.  
+  - Output size:
+    - `H_out = floor((H + 2*pH - dH*(kH - 1) - 1) / sH) + 1`
+    - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
+  - `kernel_size`, `stride`, `padding`, `dilation`: int or tuple values controlling receptive field and output resolution.  
+  - `W`: optional Tensor shaped `(out_channels, in_channels*kH*kW)` or `(in_channels*kH*kW, out_channels)` (auto-transposed).  
+  - `b`: optional Tensor of shape `(out_channels,)`; if `use_bias=False`, bias is disabled and excluded from `.parameters`.  
+  - Checkpointing support includes both trainables and layer config via `.named_buffers()` / `.apply_state()`.
+  - Use when data has two spatial axes (images, spectrogram-like feature maps).
+
 - **Dropout(p=0.5, seed=None, training=True)**  
   - Inverted dropout for 1D/2D inputs.  
   - `p`: drop probability in [0,1]; `seed`: reproducible masks; `training`: initial mode.  

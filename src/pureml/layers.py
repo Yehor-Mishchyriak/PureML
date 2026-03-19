@@ -881,6 +881,104 @@ class BatchNorm1d(Layer):
         _logger.debug("BN1d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
+class BatchNorm2d(Layer):
+    """Batch Normalization for 4D NCHW inputs shaped ``(B, C, H, W)``.
+
+    This class reuses :class:`BatchNorm1d` by flattening spatial positions into
+    the batch axis:
+
+    ``(B, C, H, W) -> (B*H*W, C) -> BN1d -> (B, C, H, W)``.
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        *,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        gamma: Tensor | None = None,
+        beta: Tensor | None = None,
+        running_variance: Tensor | None = None,
+        running_mean: Tensor | None = None,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self._bn1d = BatchNorm1d(
+            num_features,
+            eps=eps,
+            momentum=momentum,
+            gamma=gamma,
+            beta=beta,
+            running_variance=running_variance,
+            running_mean=running_mean,
+            training=training,
+        )
+        _logger.debug(
+            "BN2d.__init__: C=%d, eps=%g, momentum=%.3f, training=%s",
+            int(num_features), float(eps), float(momentum), bool(training)
+        )
+
+    def on_mode_change(self, training: bool):
+        self._bn1d.training = bool(training)
+        _logger.debug("BatchNorm2d mode changed: training=%s", bool(training))
+
+    @property
+    def num_features(self) -> int:
+        return self._bn1d.num_features
+
+    @property
+    def momentum(self) -> float:
+        return self._bn1d.momentum
+
+    @momentum.setter
+    def momentum(self, v: float) -> None:
+        self._bn1d.momentum = float(v)
+
+    @property
+    def gamma(self) -> Tensor:
+        return self._bn1d.gamma
+
+    @property
+    def beta(self) -> Tensor:
+        return self._bn1d.beta
+
+    @property
+    def running_mean(self) -> Tensor:
+        return self._bn1d.running_mean
+
+    @property
+    def running_variance(self) -> Tensor:
+        return self._bn1d.running_variance
+
+    @property
+    def eps(self) -> Tensor:
+        return self._bn1d.eps
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return self._bn1d.parameters
+
+    def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        return self._bn1d.named_buffers()
+
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        self._bn1d.apply_state(tunable=tunable, buffers=buffers)
+        self._training = self._bn1d.training
+
+    def __call__(self, X: Tensor) -> Tensor:
+        x = X.data
+        if x.ndim != 4 or x.shape[1] != self.num_features:
+            raise ValueError(
+                f"BatchNorm2d expects input of shape (B, {self.num_features}, H, W); got {x.shape}"
+            )
+
+        B, C, H, W = x.shape
+        _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
+        flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
+        out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
+        _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
+        return out
+
 class LayerNorm1d(Layer):
 
     def __init__(self,
@@ -2445,6 +2543,7 @@ __all__ = [
     "Affine",
     "Dropout",
     "BatchNorm1d",
+    "BatchNorm2d",
     "LayerNorm1d",
     "Embedding",
     "unfold2d",

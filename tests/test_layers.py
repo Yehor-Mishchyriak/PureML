@@ -4,7 +4,11 @@ import numpy as np
 
 # Public API
 from pureml.machinery import Tensor
-from pureml.layers import Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding, Conv1D, Conv2D, unfold1d, unfold2d
+from pureml.layers import (
+    Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding,
+    Conv1D, Conv2D, MaxPool1D, MeanPool1D, MaxPool2D, MeanPool2D,
+    unfold1d, unfold2d
+)
 from pureml.general_math import mean
 
 def _rng(seed=0):
@@ -186,6 +190,130 @@ def _manual_conv2d(
     if b is not None:
         Z = Z + b[None, :, None]
     return Z.reshape(B, W.shape[0], H_out, W_out)
+
+
+def _manual_pool1d(
+        X: np.ndarray,
+        *,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0,
+        mode: str) -> np.ndarray:
+    cols = _manual_unfold1d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kL, L_out)
+    B, C, _ = X.shape
+    K = int(kernel_size)
+    U = cols.reshape(B, C, K, -1)
+    if mode == "mean":
+        return U.mean(axis=2)
+    if mode == "max":
+        return U.max(axis=2)
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+def _manual_pool2d(
+        X: np.ndarray,
+        *,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0,
+        mode: str) -> np.ndarray:
+    cols = _manual_unfold2d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kH*kW, P)
+    B, C, _, _ = X.shape
+    kH, kW = kernel_size
+    K = kH * kW
+    U = cols.reshape(B, C, K, -1)
+    if mode == "mean":
+        return U.mean(axis=2)
+    if mode == "max":
+        return U.max(axis=2)
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+def _manual_pool1d_input_grad(
+        X: np.ndarray,
+        upstream: np.ndarray,
+        *,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        dilation: int,
+        pad_with: float = 0.0,
+        mode: str) -> np.ndarray:
+    cols = _manual_unfold1d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kL, P)
+    B, C, _ = X.shape
+    K = int(kernel_size)
+    U = cols.reshape(B, C, K, -1)
+    if mode == "mean":
+        gU = np.broadcast_to(upstream[:, :, None, :] / K, U.shape).copy()
+    elif mode == "max":
+        idx = np.argmax(U, axis=2)  # (B, C, P)
+        gU = np.zeros_like(U)
+        np.put_along_axis(gU, idx[:, :, None, :], upstream[:, :, None, :], axis=2)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    gcols = gU.reshape(B, C * K, -1)
+    return _manual_fold1d_grad(gcols, X.shape, kernel_size, stride, padding, dilation)
+
+
+def _manual_pool2d_input_grad(
+        X: np.ndarray,
+        upstream: np.ndarray,
+        *,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        dilation: tuple[int, int],
+        pad_with: float = 0.0,
+        mode: str) -> np.ndarray:
+    cols = _manual_unfold2d(
+        X,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        pad_with=pad_with
+    )  # (B, C*kH*kW, P)
+    B, C, _, _ = X.shape
+    kH, kW = kernel_size
+    K = kH * kW
+    U = cols.reshape(B, C, K, -1)
+    if mode == "mean":
+        gU = np.broadcast_to(upstream[:, :, None, :] / K, U.shape).copy()
+    elif mode == "max":
+        idx = np.argmax(U, axis=2)  # (B, C, P)
+        gU = np.zeros_like(U)
+        np.put_along_axis(gU, idx[:, :, None, :], upstream[:, :, None, :], axis=2)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    gcols = gU.reshape(B, C * K, -1)
+    return _manual_fold2d_grad(gcols, X.shape, kernel_size, stride, padding, dilation)
 
 class _ToyLayer(Layer):
     def __init__(self):
@@ -1184,6 +1312,207 @@ class TestConv2D(ut.TestCase):
             g_num[idx] = (obj(x_p) - obj(x_m)) / (2.0 * eps)
 
         np.testing.assert_allclose(g_auto, g_num, rtol=1e-5, atol=1e-6)
+
+
+class TestMeanPool1D(ut.TestCase):
+    def test_forward_matches_manual_reference(self):
+        B, C, L = 2, 3, 9
+        kL, sL, pL, dL = 3, 2, 1, 1
+        rng = _rng(500)
+        X_np = rng.standard_normal((B, C, L))
+        layer = MeanPool1D(kL, stride=sL, padding=pL, dilation=dL, pad_with=-0.25)
+
+        Y = layer(Tensor(X_np, requires_grad=False))
+        Y_ref = _manual_pool1d(
+            X_np, kernel_size=kL, stride=sL, padding=pL, dilation=dL, pad_with=-0.25, mode="mean"
+        )
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_manual_reference(self):
+        B, C, L = 2, 2, 8
+        kL, sL, pL, dL = 3, 1, 1, 2
+        rng = _rng(501)
+        X_np = rng.standard_normal((B, C, L))
+        X = Tensor(X_np.copy(), requires_grad=True)
+        layer = MeanPool1D(kL, stride=sL, padding=pL, dilation=dL, pad_with=0.5)
+        Y = layer(X)
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        g_ref = _manual_pool1d_input_grad(
+            X_np, U, kernel_size=kL, stride=sL, padding=pL, dilation=dL, pad_with=0.5, mode="mean"
+        )
+        np.testing.assert_allclose(X.grad, g_ref, rtol=1e-6, atol=1e-8)
+
+    def test_parameter_contract_and_validation_errors(self):
+        layer = MeanPool1D(3)
+        self.assertEqual(layer.parameters, ())
+        with self.assertRaises(ValueError):
+            _ = layer(Tensor(np.zeros((2, 3, 4, 5))))  # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = MeanPool1D(5)(Tensor(np.zeros((1, 1, 2))))  # invalid output size
+
+
+class TestMaxPool1D(ut.TestCase):
+    def test_forward_matches_manual_reference(self):
+        B, C, L = 2, 2, 10
+        kL, sL, pL, dL = 4, 2, 1, 1
+        rng = _rng(510)
+        X_np = rng.standard_normal((B, C, L))
+        # tiny monotonic bias to avoid ties in windows
+        X_np += np.linspace(0.0, 1e-7, L)[None, None, :]
+        layer = MaxPool1D(kL, stride=sL, padding=pL, dilation=dL, pad_with=-3.0)
+
+        Y = layer(Tensor(X_np, requires_grad=False))
+        Y_ref = _manual_pool1d(
+            X_np, kernel_size=kL, stride=sL, padding=pL, dilation=dL, pad_with=-3.0, mode="max"
+        )
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_manual_reference(self):
+        B, C, L = 2, 2, 9
+        kL, sL, pL, dL = 3, 2, 1, 1
+        rng = _rng(511)
+        X_np = rng.standard_normal((B, C, L))
+        X_np += np.linspace(0.0, 1e-7, L)[None, None, :]
+        X = Tensor(X_np.copy(), requires_grad=True)
+        layer = MaxPool1D(kL, stride=sL, padding=pL, dilation=dL, pad_with=-2.0)
+        Y = layer(X)
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        g_ref = _manual_pool1d_input_grad(
+            X_np, U, kernel_size=kL, stride=sL, padding=pL, dilation=dL, pad_with=-2.0, mode="max"
+        )
+        np.testing.assert_allclose(X.grad, g_ref, rtol=1e-6, atol=1e-8)
+
+    def test_parameter_contract_and_validation_errors(self):
+        layer = MaxPool1D(3)
+        self.assertEqual(layer.parameters, ())
+        with self.assertRaises(ValueError):
+            _ = layer(Tensor(np.zeros((2, 3, 4, 5))))  # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = MaxPool1D(5)(Tensor(np.zeros((1, 1, 2))))  # invalid output size
+
+
+class TestMeanPool2D(ut.TestCase):
+    def test_forward_matches_manual_reference(self):
+        B, C, H, W = 2, 2, 6, 7
+        k = (2, 3)
+        s = (2, 1)
+        p = (1, 0)
+        d = (1, 2)
+        rng = _rng(520)
+        X_np = rng.standard_normal((B, C, H, W))
+        layer = MeanPool2D(k, stride=s, padding=p, dilation=d, pad_with=0.25)
+
+        Y = layer(Tensor(X_np, requires_grad=False))
+        Y_flat = _manual_pool2d(
+            X_np, kernel_size=k, stride=s, padding=p, dilation=d, pad_with=0.25, mode="mean"
+        )
+        H_out = int(np.floor((H + 2*p[0] - d[0]*(k[0] - 1) - 1) / s[0]) + 1)
+        W_out = int(np.floor((W + 2*p[1] - d[1]*(k[1] - 1) - 1) / s[1]) + 1)
+        Y_ref = Y_flat.reshape(B, C, H_out, W_out)
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_manual_reference(self):
+        B, C, H, W = 1, 2, 5, 6
+        k = (3, 2)
+        s = (1, 2)
+        p = (1, 1)
+        d = (1, 1)
+        rng = _rng(521)
+        X_np = rng.standard_normal((B, C, H, W))
+        X = Tensor(X_np.copy(), requires_grad=True)
+        layer = MeanPool2D(k, stride=s, padding=p, dilation=d, pad_with=-1.0)
+        Y = layer(X)
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        g_ref = _manual_pool2d_input_grad(
+            X_np,
+            U.reshape(B, C, -1),
+            kernel_size=k,
+            stride=s,
+            padding=p,
+            dilation=d,
+            pad_with=-1.0,
+            mode="mean"
+        )
+        np.testing.assert_allclose(X.grad, g_ref, rtol=1e-6, atol=1e-8)
+
+    def test_parameter_contract_and_validation_errors(self):
+        layer = MeanPool2D((2, 2))
+        self.assertEqual(layer.parameters, ())
+        with self.assertRaises(ValueError):
+            _ = layer(Tensor(np.zeros((2, 3, 4))))  # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = MeanPool2D((5, 5))(Tensor(np.zeros((1, 1, 2, 2))))  # invalid output size
+        with self.assertRaises(TypeError):
+            _ = MeanPool2D((2,))  # bad tuple arity
+
+
+class TestMaxPool2D(ut.TestCase):
+    def test_forward_matches_manual_reference(self):
+        B, C, H, W = 2, 2, 6, 6
+        k = (2, 2)
+        s = (2, 1)
+        p = (1, 1)
+        d = (1, 1)
+        rng = _rng(530)
+        X_np = rng.standard_normal((B, C, H, W))
+        X_np += np.linspace(0.0, 1e-7, H * W).reshape(1, 1, H, W)
+        layer = MaxPool2D(k, stride=s, padding=p, dilation=d, pad_with=-2.0)
+
+        Y = layer(Tensor(X_np, requires_grad=False))
+        Y_flat = _manual_pool2d(
+            X_np, kernel_size=k, stride=s, padding=p, dilation=d, pad_with=-2.0, mode="max"
+        )
+        H_out = int(np.floor((H + 2*p[0] - d[0]*(k[0] - 1) - 1) / s[0]) + 1)
+        W_out = int(np.floor((W + 2*p[1] - d[1]*(k[1] - 1) - 1) / s[1]) + 1)
+        Y_ref = Y_flat.reshape(B, C, H_out, W_out)
+        self.assertEqual(Y.data.shape, Y_ref.shape)
+        np.testing.assert_allclose(Y.data, Y_ref, rtol=1e-6, atol=1e-8)
+
+    def test_backward_input_grad_matches_manual_reference(self):
+        B, C, H, W = 1, 2, 5, 5
+        k = (3, 2)
+        s = (1, 1)
+        p = (1, 0)
+        d = (1, 1)
+        rng = _rng(531)
+        X_np = rng.standard_normal((B, C, H, W))
+        X_np += np.linspace(0.0, 1e-7, H * W).reshape(1, 1, H, W)
+        X = Tensor(X_np.copy(), requires_grad=True)
+        layer = MaxPool2D(k, stride=s, padding=p, dilation=d, pad_with=-5.0)
+        Y = layer(X)
+        U = rng.standard_normal(Y.data.shape)
+        Y.backward(U)
+
+        g_ref = _manual_pool2d_input_grad(
+            X_np,
+            U.reshape(B, C, -1),
+            kernel_size=k,
+            stride=s,
+            padding=p,
+            dilation=d,
+            pad_with=-5.0,
+            mode="max"
+        )
+        np.testing.assert_allclose(X.grad, g_ref, rtol=1e-6, atol=1e-8)
+
+    def test_parameter_contract_and_validation_errors(self):
+        layer = MaxPool2D((2, 2))
+        self.assertEqual(layer.parameters, ())
+        with self.assertRaises(ValueError):
+            _ = layer(Tensor(np.zeros((2, 3, 4))))  # ndim mismatch
+        with self.assertRaises(ValueError):
+            _ = MaxPool2D((5, 5))(Tensor(np.zeros((1, 1, 2, 2))))  # invalid output size
+        with self.assertRaises(TypeError):
+            _ = MaxPool2D((2,))  # bad tuple arity
 
 
 class TestUnfold(ut.TestCase):

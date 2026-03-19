@@ -53,7 +53,6 @@ The only runtime deps are: `numpy`, `zarr`
   - Kaiming normal initialization: Added fan-in He initialization with nonlinearity-aware gain (`relu`, `leaky_relu`, etc.) and enabled it in `Affine` via `method="kaiming-normal"`.
 - **New activations:**
   - leaky_relu: Added elementwise LeakyReLU with configurable `negative_slope` (default `0.01`).
-  - prelu: **IMPLEMENTATION PENDING**
 - **Additional Tensor operations:**
   - Tensor.dot: Added a shape-validated dot op with explicit VJPs for `1D·1D` and `2D·2D` cases (mixed-rank and invalid-shape inputs raise clear errors).
   - Tensor.general_transpose: Added N-D axis permutation with backward support via cached inverse permutation.

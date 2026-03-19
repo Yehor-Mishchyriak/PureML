@@ -1174,7 +1174,9 @@ __all__ = [
     "no_grad",
     "ln",
     "log2",
-    "sqrt"
+    "sqrt",
+    "reshape",
+    "flatten",
 ]
 
 if __name__ == "__main__":

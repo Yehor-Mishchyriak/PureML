@@ -2337,13 +2337,18 @@ class Sequential(Layer):
 
 __all__ = [
     "xavier_glorot_normal",
+    "calculate_gain",
+    "kaiming_normal",
     "Layer",
     "Affine",
     "Dropout",
     "BatchNorm1d",
+    "LayerNorm1d",
     "Embedding",
     "unfold2d",
     "unfold1d",
+    "Conv2D",
+    "Conv1D",
 ]
 
 if __name__ == "__main__":

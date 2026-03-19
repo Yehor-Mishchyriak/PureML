@@ -248,6 +248,7 @@ def log_softmax(x: Tensor, axis: int = -1) -> Tensor:
 __all__ = [
     "sigmoid",
     "relu",
+    "leaky_relu",
     "tanh",
     "softmax",
     "log_softmax"

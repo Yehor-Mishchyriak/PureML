@@ -126,22 +126,16 @@ def calculate_gain(
 
     _logger.error("calculate_gain: unsupported nonlinearity=%s", nonlinearity)
     raise ValueError(f"Unsupported nonlinearity: {nonlinearity}")
+    
+_nonlinearity_types = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
 
 def kaiming_normal(
     fan_in: int,
     fan_out: int,
-    nonlinearity: Literal[
-        'Affine',
-        'Conv1D',
-        'Conv2D',
-        "sigmoid",
-        "tanh",
-        "relu",
-        "leaky_relu"
-    ] = "relu",
+    nonlinearity: _nonlinearity_types = "relu",
     *,
     param: int | float | None = None,
-    rng: np.random.Generator | None = None,
+    rng: np.random.Generator | None = None
 ) -> tuple[Tensor, Tensor]:
     """Initialize weights and bias using Kaiming/He normal (fan-in mode).
 
@@ -200,6 +194,13 @@ def kaiming_normal(
     )
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
+
+_weight_init_funcs = {
+    "xavier-glorot-normal": xavier_glorot_normal,
+    "kaiming-normal": kaiming_normal,
+}
+
+_weight_init_funcs_type = Literal["xavier-glorot-normal", "kaiming-normal"]
 
 # *----------------------------------------------------*
 
@@ -316,7 +317,7 @@ class Affine(Layer):
     def __init__(self,
                  fan_in: int,
                  fan_out: int, 
-                 method: Literal["xavier-glorot-normal", "kaiming-normal"] = "xavier-glorot-normal",
+                 method: _weight_init_funcs_type = "xavier-glorot-normal",
                  W: Tensor | None = None, 
                  b: Tensor | None = None,
                  *,
@@ -329,10 +330,7 @@ class Affine(Layer):
         self.use_bias = bool(bias)
 
         try:
-            init_fn = {
-                "xavier-glorot-normal": xavier_glorot_normal,
-                "kaiming-normal": lambda fi, fo, *, rng=None: kaiming_normal(fi, fo, nonlinearity="relu", rng=rng),
-            }[method]
+            init_fn = _weight_init_funcs[method]
         except KeyError as e:
             raise ValueError(f"Unknown init method '{method}'") from e
 
@@ -1038,7 +1036,7 @@ class Embedding(Layer):
         D: int,
         *,
         pad_idx: int | None = None,
-        method: Literal["xavier-glorot-normal"] = "xavier-glorot-normal",
+        method: _weight_init_funcs_type = "xavier-glorot-normal",
         W: Tensor | None = None,
         training: bool = True,
         seed: int | None = None
@@ -1048,9 +1046,7 @@ class Embedding(Layer):
         self.method = method
         self._rng, self.seed = rng_from_seed(seed)
 
-        init_fn = {
-            "xavier-glorot-normal": xavier_glorot_normal
-        }[method]
+        init_fn = _weight_init_funcs[method]
 
         if V <= 0 or D <= 0:
             raise ValueError(f"num_embeddings and embedding_dim must be positive, got {V=}, {D=}")

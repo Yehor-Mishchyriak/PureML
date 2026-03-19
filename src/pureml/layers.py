@@ -2264,23 +2264,177 @@ class Conv1D(Layer):
         _logger.debug("Conv1D forward: out.shape=%s", getattr(Z, "shape", None))
         return Z
 
+def _max_reduce_axis2(X: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+    """Reduce by max over axis=2 for tensors shaped (B, C, K, P)."""
+    idx = np.argmax(X, axis=2)  # (B, C, P)
+    out = np.take_along_axis(X, idx[:, :, None, :], axis=2).squeeze(2)  # (B, C, P)
+    _update_ctx(context, idx=idx)
+    return out
+
+@_shape_safe_grad
+def _max_reduce_axis2_grad(
+    upstream_grad: np.ndarray, X: np.ndarray, *, context: dict | None = None
+) -> tuple[np.ndarray]:
+    idx = (context if context is not None else {}).get("idx")
+    if idx is None:
+        idx = np.argmax(X, axis=2)
+    grad = np.zeros_like(X)
+    np.put_along_axis(grad, idx[:, :, None, :], upstream_grad[:, :, None, :], axis=2)
+    return (grad,)
+
 class MaxPool2D(Layer):
-    pass
+    """2D max pooling via unfold + max-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = self._pair(kernel_size)
+        self.stride = self._pair(stride)
+        self.padding = self._pair(padding)
+        self.dilation = self._pair(dilation)
+        self.pad_with = float(pad_with)
+
+    @staticmethod
+    def _pair(v: int | tuple[int, int]) -> tuple[int, int]:
+        if isinstance(v, int):
+            return (v, v)
+        if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
+            return v
+        raise TypeError(f"Expected int or tuple[int, int], got {v!r}")
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 4:
+            raise ValueError(f"MaxPool2D expects input of shape (B, C, H, W), got {X.shape}")
+        B, C, H, W = X.shape
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        pH, pW = self.padding
+        dH, dW = self.dilation
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        U = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, kH * kW, H_out * W_out)
+        Y = TensorValuedFunction(_max_reduce_axis2, _max_reduce_axis2_grad)(U)
+        return Y.reshape(B, C, H_out, W_out)
 
 class MeanPool2D(Layer):
-    pass
+    """2D mean pooling via unfold + mean-reduction."""
 
-class AdaPool2D(Layer):
-    pass
+    def __init__(
+        self,
+        kernel_size: int | tuple[int, int],
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = MaxPool2D._pair(kernel_size)
+        self.stride = MaxPool2D._pair(stride)
+        self.padding = MaxPool2D._pair(padding)
+        self.dilation = MaxPool2D._pair(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 4:
+            raise ValueError(f"MeanPool2D expects input of shape (B, C, H, W), got {X.shape}")
+        B, C, H, W = X.shape
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+        pH, pW = self.padding
+        dH, dW = self.dilation
+        H_out = _L_out(H, pH, dH, kH, sH)
+        W_out = _L_out(W, pW, dW, kW, sW)
+        U = unfold2d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, kH * kW, H_out * W_out)
+        Y = general_math.mean(U, axis=2)
+        return Y.reshape(B, C, H_out, W_out)
 
 class MaxPool1D(Layer):
-    pass
+    """1D max pooling via unfold + max-reduction."""
+
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = int(kernel_size)
+        self.stride = int(stride)
+        self.padding = int(padding)
+        self.dilation = int(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 3:
+            raise ValueError(f"MaxPool1D expects input of shape (B, C, L), got {X.shape}")
+        B, C, L = X.shape
+        L_out = _L_out(L, self.padding, self.dilation, self.kernel_size, self.stride)
+        U = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, self.kernel_size, L_out)
+        Y = TensorValuedFunction(_max_reduce_axis2, _max_reduce_axis2_grad)(U)
+        return Y.reshape(B, C, L_out)
 
 class MeanPool1D(Layer):
-    pass
+    """1D mean pooling via unfold + mean-reduction."""
 
-class AdaPool1D(Layer):
-    pass
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        pad_with: float = 0.0,
+        *,
+        training: bool = True,
+    ) -> None:
+        super().__init__(training=training)
+        self.kernel_size = int(kernel_size)
+        self.stride = int(stride)
+        self.padding = int(padding)
+        self.dilation = int(dilation)
+        self.pad_with = float(pad_with)
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()
+
+    def __call__(self, X: Tensor) -> Tensor:
+        if X.ndim != 3:
+            raise ValueError(f"MeanPool1D expects input of shape (B, C, L), got {X.shape}")
+        B, C, L = X.shape
+        L_out = _L_out(L, self.padding, self.dilation, self.kernel_size, self.stride)
+        U = unfold1d(X, self.kernel_size, self.stride, self.padding, self.dilation, self.pad_with)
+        U = U.reshape(B, C, self.kernel_size, L_out)
+        Y = general_math.mean(U, axis=2)
+        return Y.reshape(B, C, L_out)
 
 
 __all__ = [
@@ -2297,6 +2451,10 @@ __all__ = [
     "unfold1d",
     "Conv2D",
     "Conv1D",
+    "MaxPool2D",
+    "MeanPool2D",
+    "MaxPool1D",
+    "MeanPool1D",
 ]
 
 if __name__ == "__main__":

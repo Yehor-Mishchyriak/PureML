@@ -882,12 +882,17 @@ class BatchNorm1d(Layer):
         return out
 
 class BatchNorm2d(Layer):
-    """Batch Normalization for 4D NCHW inputs shaped ``(B, C, H, W)``.
+    """Batch normalization for image-like tensors.
 
-    This class reuses :class:`BatchNorm1d` by flattening spatial positions into
-    the batch axis:
+    Use this layer with inputs shaped ``(B, C, H, W)``, where ``C`` is the
+    number of channels. Typical usage is in convolutional models (e.g., after
+    `Conv2D` and before/after activation).
 
-    ``(B, C, H, W) -> (B*H*W, C) -> BN1d -> (B, C, H, W)``.
+    Behavior:
+      - In training mode, normalization uses current-batch statistics and
+        updates running statistics.
+      - In eval mode, normalization uses stored running statistics for
+        deterministic inference.
     """
 
     def __init__(
@@ -902,6 +907,18 @@ class BatchNorm2d(Layer):
         running_mean: Tensor | None = None,
         training: bool = True,
     ) -> None:
+        """Create a BatchNorm2d layer.
+
+        Args:
+            num_features: Number of channels ``C`` in input ``(B, C, H, W)``.
+            eps: Small constant added for numerical stability.
+            momentum: Running-stat update factor.
+            gamma: Optional learnable per-channel scale tensor of shape ``(C,)``.
+            beta: Optional learnable per-channel shift tensor of shape ``(C,)``.
+            running_variance: Optional running variance buffer to resume from.
+            running_mean: Optional running mean buffer to resume from.
+            training: Initial mode (`True` for training, `False` for eval).
+        """
         super().__init__(training=training)
         self._bn1d = BatchNorm1d(
             num_features,
@@ -919,6 +936,7 @@ class BatchNorm2d(Layer):
         )
 
     def on_mode_change(self, training: bool):
+        """Keep normalization behavior in sync with model mode changes."""
         self._bn1d.training = bool(training)
         _logger.debug("BatchNorm2d mode changed: training=%s", bool(training))
 
@@ -959,13 +977,16 @@ class BatchNorm2d(Layer):
         return self._bn1d.parameters
 
     def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        """Return non-trainable state used for checkpoint save/load."""
         return self._bn1d.named_buffers()
 
     def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Load trainable params and running stats from a checkpoint payload."""
         self._bn1d.apply_state(tunable=tunable, buffers=buffers)
         self._training = self._bn1d.training
 
     def __call__(self, X: Tensor) -> Tensor:
+        """Normalize an input tensor shaped ``(B, C, H, W)``."""
         x = X.data
         if x.ndim != 4 or x.shape[1] != self.num_features:
             raise ValueError(
@@ -975,9 +996,7 @@ class BatchNorm2d(Layer):
         B, C, H, W = x.shape
         _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
         flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
-        # ^ ^ ^ transpose: (B, C, H, W) -> (B, H, W, C); reshape into (BHW, C)
         out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
-        # ^ ^ ^ normalize the feature maps (C dim) and transpose back into the original shape
         _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 

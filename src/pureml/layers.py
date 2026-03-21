@@ -74,10 +74,10 @@ def xavier_glorot_normal(
 
     return Tensor(W, requires_grad=True), Tensor(b, requires_grad=True)
 
-_nonlinearity_types = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
+_nonlinearity_type = Literal['Affine', 'Conv1D', 'Conv2D', "sigmoid", "tanh", "relu", "leaky_relu"]
 
 def calculate_gain(
-        nonlinearity: _nonlinearity_types,
+        nonlinearity: _nonlinearity_type,
         param: int | float | None):
     """Return the recommended gain for weight initialization.
 
@@ -125,7 +125,7 @@ def calculate_gain(
 def kaiming_normal(
     fan_in: int,
     fan_out: int,
-    nonlinearity: _nonlinearity_types = "relu",
+    nonlinearity: _nonlinearity_type = "relu",
     *,
     param: int | float | None = None,
     rng: np.random.Generator | None = None
@@ -930,7 +930,7 @@ class BatchNorm2d(Layer):
     def momentum(self) -> float:
         return self._bn1d.momentum
 
-    @momentum.setter
+    @momentum.setter # so that momentum isn't readonly
     def momentum(self, v: float) -> None:
         self._bn1d.momentum = float(v)
 
@@ -975,7 +975,9 @@ class BatchNorm2d(Layer):
         B, C, H, W = x.shape
         _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
         flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
+        # ^ ^ ^ transpose: (B, C, H, W) -> (B, H, W, C); reshape into (BHW, C)
         out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
+        # ^ ^ ^ normalize the feature maps (C dim) and transpose back into the original shape
         _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
@@ -1324,6 +1326,13 @@ class Embedding(Layer):
 # *----------------------------------------------------*
 #          CNN HELPER FUNCTIONS (PRIVATE SCOPE)
 # *----------------------------------------------------*
+
+def _decode_text(val) -> str:
+    if isinstance(val, np.ndarray):
+        val = val.item()
+    if isinstance(val, (bytes, bytearray)):
+        val = val.decode("utf-8", "ignore")
+    return str(val)
 
 def _L_out(L_in: int, p: int, d: int, kL: int, s: int) -> int:
     return floor((L_in + 2*p - d*(kL - 1) - 1) / s) + 1
@@ -1827,7 +1836,7 @@ class Conv2D(Layer):
         b: Tensor | None = None,
         *,
         method: _weight_init_funcs_type = "kaiming-normal",
-        nonlinearity: _nonlinearity_types = "relu",
+        nonlinearity: _nonlinearity_type = "relu",
         training: bool = True,
         seed: int | None = None):
         """Initialize a Conv2D layer.
@@ -1961,13 +1970,6 @@ class Conv2D(Layer):
         self._validate_contract()
 
         if buffers:
-            def _decode_text(val) -> str:
-                if isinstance(val, np.ndarray):
-                    val = val.item()
-                if isinstance(val, (bytes, bytearray)):
-                    val = val.decode("utf-8", "ignore")
-                return str(val)
-
             # immutable shape/config guards
             if "in_channels" in buffers and buffers["in_channels"] is not None:
                 got = int(np.asarray(buffers["in_channels"]).item())
@@ -2107,7 +2109,7 @@ class Conv1D(Layer):
         b: Tensor | None = None,
         *,
         method: _weight_init_funcs_type = "kaiming-normal",
-        nonlinearity: _nonlinearity_types = "relu",
+        nonlinearity: _nonlinearity_type = "relu",
         training: bool = True,
         seed: int | None = None
     ):
@@ -2243,13 +2245,6 @@ class Conv1D(Layer):
         self._validate_contract()
 
         if buffers:
-            def _decode_text(val) -> str:
-                if isinstance(val, np.ndarray):
-                    val = val.item()
-                if isinstance(val, (bytes, bytearray)):
-                    val = val.decode("utf-8", "ignore")
-                return str(val)
-
             # immutable shape/config guards
             if "in_channels" in buffers and buffers["in_channels"] is not None:
                 got = int(np.asarray(buffers["in_channels"]).item())

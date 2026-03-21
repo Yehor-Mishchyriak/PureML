@@ -357,7 +357,8 @@ for batch in loader:
   - `.save(pth)` saves only trainable parameters (backward-compatible).
   - `.save_state(pth)` saves parameters, buffers, and literals; stored with attrs `meta.kind="NNState"` and `model_class`.
   - `.load_state(pth, strict=True, load_literals=True)` loads a full state (shape-checked per parameter/buffer when `strict`).
-  - `.load_params(param_pth)` loads parameters only (`<layer>.param.<i>` blocks).
+  - `.load_params(param_pth)` loads parameters-only checkpoints from `<layer>.<i>` blocks.
+  - Note: full-state checkpoints use `<layer>.param.<i>` plus `<layer>.buf.<name>` blocks.
   - Module-level helpers: `save_mdl_params(obj_or_dict, pth)`, `save_full_state(mdl, pth)`, `load_state(mdl, pth, ...)`, `get_mdl_params(mdl)`, `get_mdl_named_buffers(mdl)`.
 
 Mode propagation matters for layers like Dropout/BatchNorm and for `MNIST_BEATER.predict`, which changes its return type depending on mode.
@@ -409,7 +410,7 @@ Optimizers:
 Learning-rate schedulers (operate in-place on attached optimizer’s `lr`):
 - **StepLR(optim, step_size, gamma=0.1, last_step=-1)**: decay `lr *= gamma` every `step_size` steps. `last_step` lets you resume. `step(n)` advances by `n` (default 1).
 - **ExponentialLR(optim, gamma, last_step=-1)**: smooth per-step decay `lr *= gamma` each `step()`. `last_step` for resume.
-- **CosineAnnealingLR(optim, T_max, eta_min=0.0, last_step=-1)**: half-cosine from `base_lr` to `eta_min` over `T_max` steps; repeats every `T_max`. `step(n)` advances by `n` and returns new lr.
+- **CosineAnnealingLR(optim, T_max, eta_min=0.0, last_step=-1)**: half-cosine from `base_lr` to `eta_min` over `T_max` steps (no restarts; lr stays at `eta_min` after `T_max`). `step(n)` advances by `n` and returns new lr.
 
 ---
 

@@ -930,7 +930,7 @@ class BatchNorm2d(Layer):
     def momentum(self) -> float:
         return self._bn1d.momentum
 
-    @momentum.setter
+    @momentum.setter # so that momentum isn't readonly
     def momentum(self, v: float) -> None:
         self._bn1d.momentum = float(v)
 
@@ -975,7 +975,9 @@ class BatchNorm2d(Layer):
         B, C, H, W = x.shape
         _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
         flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
+        # ^ ^ ^ transpose: (B, C, H, W) -> (B, H, W, C); reshape into (BHW, C)
         out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
+        # ^ ^ ^ normalize the feature maps (C dim) and transpose back into the original shape
         _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 

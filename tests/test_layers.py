@@ -5,7 +5,7 @@ import numpy as np
 # Public API
 from pureml.machinery import Tensor
 from pureml.layers import (
-    Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding,
+    Layer, Affine, Dropout, Dropout2d, BatchNorm1d, LayerNorm1d, Embedding,
     Conv1D, Conv2D, MaxPool1D, MeanPool1D, MaxPool2D, MeanPool2D, BatchNorm2d,
     unfold1d, unfold2d, output_len_1d, output_shape_2d
 )
@@ -572,6 +572,56 @@ class TestDropout(ut.TestCase):
         upstream = rng.standard_normal((4, 3))
 
         gX, gmask, gscale = Dropout._dropout_grad(upstream, X, mask, scale)
+        np.testing.assert_allclose(gX, upstream * (mask * scale), rtol=1e-6, atol=1e-8)
+        self.assertIsNone(gmask)
+        self.assertIsNone(gscale)
+
+
+class TestDropout2d(ut.TestCase):
+    def test_eval_identity(self):
+        X = Tensor(_rng(0).standard_normal((4, 6, 8, 8)))
+        d = Dropout2d(p=0.75, seed=123).eval()  # eval => identity
+        Y = d(X)
+        np.testing.assert_allclose(Y.data, X.data, rtol=0, atol=0)
+
+    def test_train_p0_identity(self):
+        X = Tensor(_rng(1).standard_normal((5, 7, 4, 4)))
+        d = Dropout2d(p=0.0, seed=42).train()  # no drop
+        Y = d(X)
+        np.testing.assert_allclose(Y.data, X.data, rtol=0, atol=0)
+
+    def test_seeded_determinism(self):
+        X = Tensor(np.ones((16, 8, 5, 5)))  # large enough to exercise mask
+        d1 = Dropout2d(p=0.6, seed=2024).train()
+        d2 = Dropout2d(p=0.6, seed=2024).train()
+        Y1 = d1(X)
+        Y2 = d2(X)
+        np.testing.assert_allclose(Y1.data, Y2.data, rtol=0, atol=0)
+
+    def test_channelwise_mask(self):
+        X = Tensor(np.ones((3, 4, 6, 6), dtype=np.float64))
+        d = Dropout2d(p=0.5, seed=11).train()
+        Y = d(X).data
+        allowed = {0.0, 2.0}
+        for b in range(Y.shape[0]):
+            for c in range(Y.shape[1]):
+                vals = np.unique(Y[b, c])
+                self.assertEqual(len(vals), 1)  # whole map is dropped/kept together
+                self.assertIn(float(vals[0]), allowed)
+
+    def test_invalid_rank_raises(self):
+        d = Dropout2d(p=0.5, seed=1).train()
+        with self.assertRaises(ValueError):
+            _ = d(Tensor(np.zeros((3, 5))))
+
+    def test_dropout_grad_returns_none_for_mask_and_scale(self):
+        rng = _rng(99)
+        X = rng.standard_normal((2, 3, 4, 4))
+        mask = (rng.random((2, 3, 1, 1)) < 0.7).astype(np.float64)
+        scale = np.asarray(1.0 / 0.7, dtype=np.float64)
+        upstream = rng.standard_normal((2, 3, 4, 4))
+
+        gX, gmask, gscale = Dropout2d._dropout_grad(upstream, X, mask, scale)
         np.testing.assert_allclose(gX, upstream * (mask * scale), rtol=1e-6, atol=1e-8)
         self.assertIsNone(gmask)
         self.assertIsNone(gscale)

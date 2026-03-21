@@ -59,6 +59,9 @@ The only runtime deps are: `numpy`, `zarr`
   - Tensor.unsqueeze: Inserts size-1 dimensions (like NumPy `expand_dims`).
   - unfold1d: Added 1D unfolding utility for sliding-window workflows.
   - unfold2d: Added 2D unfolding utility for sliding-window workflows.
+- **New shape utilities for CNN design:**
+  - `output_len_1d(...)`: Added a public helper to compute 1D output length for Conv1D/Pool1D settings.
+  - `output_shape_2d(...)`: Added a public helper to compute `(H_out, W_out)` for Conv2D/Pool2D settings.
 - **Miscellaneous:**
   - calculate_gain: Added recommended gain computation for `Affine`/`Conv1D`/`Conv2D`, `sigmoid`, `tanh`, `relu`, and `leaky_relu` (with configurable negative slope).
   - BatchNorm1d state fix: checkpoints now persist and restore `eps`, `momentum`, `training`, and `num_features` (in addition to running stats), with validation on restore.

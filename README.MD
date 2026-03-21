@@ -316,11 +316,16 @@ If you need GPUs, distributed training, or huge model zoos, you should use PyTor
 
 ---
 
-## Continuous Development (the following will be added soon)
+## Continuous Development (the following additions are planned)
 
-- Convolutional layers and pooling
-- Recurrent Layers
+- Recurrent Layers (vanilla RNN and LSTM)
+- Self-attention
+- Kullback-Leiber divergence
+- Cosine similarity loss
+- PReLU
 - Extra evaluation metrics (Precision, Recall, F1-Score)
+- Image transforms
+- Tokenizer and token positional encoder
 - Training visualisation utilities
 
 ---

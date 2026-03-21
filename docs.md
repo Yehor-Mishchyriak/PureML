@@ -66,6 +66,102 @@ print(f"Test accuracy: {acc * 100}")
 
 `MnistDataset("train")` yields `(Tensor image, one_hot Tensor label)`, normalized to `[0, 1]`. In eval mode `MNIST_BEATER.predict` returns class indices; in train mode it returns logits for loss computation.
 
+### CNN Example (MNIST)
+
+```python
+from pureml.base import NN
+from pureml.layers import Conv2D, MaxPool2D, Affine, BatchNorm2d, Dropout, Dropout2d, output_shape_2d
+from pureml.activations import relu
+from pureml import Tensor, no_grad
+from pureml.training_utils import DataLoader
+from pureml.datasets.MNIST import MnistDataset
+from pureml.losses import CCE
+from pureml.optimizers import SGD
+from pureml.evaluation import accuracy
+
+
+class ConvNet(NN):
+
+    def __init__(self, in_features: int, img_res: tuple[int, int]):
+        # Conv+Pool+BN Layer 1:
+        H, W = img_res
+        conv_kwargs = dict(kernel_size=2, stride=1, padding=0, dilation=1)
+        self.conv1 = Conv2D(in_channels=in_features, out_channels=32, **conv_kwargs)
+        H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
+        conv_kwargs["stride"] = 2
+        conv_kwargs["kernel_size"] = 3
+        self.pool1 = MaxPool2D(**conv_kwargs)
+        H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
+        self.bn1 = BatchNorm2d(32)
+        # Conv+Pool+BN Layer 2:
+        conv_kwargs = dict(kernel_size=2, stride=1, padding=0, dilation=1)
+        self.conv2 = Conv2D(in_channels=32, out_channels=64, **conv_kwargs)
+        H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
+        conv_kwargs["stride"] = 2
+        conv_kwargs["kernel_size"] = 3
+        self.pool2 = MaxPool2D(**conv_kwargs)
+        H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
+        self.bn2 = BatchNorm2d(64)
+        # Conv+BN Layer 3:
+        conv_kwargs = dict(kernel_size=2, stride=1, padding=0, dilation=1)
+        self.conv3 = Conv2D(in_channels=64, out_channels=128, **conv_kwargs)
+        H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
+        self.bn3 = BatchNorm2d(128)
+        self.dropout2d = Dropout2d(p=0.1)
+        # FC Layer 4:
+        self.fc1 = Affine(128*H*W, 320, bias=False)
+        # Dropout layer (fully connected block):
+        self.dropout = Dropout(p=0.25)
+        # FC Layer 5:
+        self.fc2 = Affine(320, 10, bias=False)
+    
+    def predict(self, X: Tensor):
+        X = X.unsqueeze(1)
+        X = self.conv1(X)
+        X = relu(X)
+        X = self.pool1(X)
+        X = self.bn1(X)
+        # ---------------
+        X = self.conv2(X)
+        X = relu(X)
+        X = self.pool2(X)
+        X = self.bn2(X)
+        # ---------------
+        X = self.conv3(X)
+        X = relu(X)
+        X = self.bn3(X)
+        X = self.dropout2d(X)
+        # ---------------
+        X = X.flatten()
+        X = self.fc1(X)
+        X = self.dropout(X)
+        X = self.fc2(X)
+        # ---------------
+        if self.training:
+            return X
+        return X.argmax(axis=-1)
+    
+
+if __name__ == "__main__":
+    model = ConvNet(1, (28, 28))
+    optim = SGD(model.parameters, lr=0.01, beta=0.9, weight_decay=0.0001)
+    with MnistDataset("train") as train:
+        for epoch in range(1, 4):
+            model.train()
+            for X, Y in DataLoader(train, batch_size=64, shuffle=True):
+                logits = model(X)
+                loss = CCE(Y, logits, from_logits=True)
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+            model.eval()
+            with no_grad():
+                with MnistDataset("test") as test:
+                    print(f"Accuracy after epoch {epoch} is {accuracy(model, test, batch_size=64)}")
+    model.save_state("convnet_mnist_demo")
+    print("Saved checkpoint to convnet_mnist_demo.pureml.zip")
+```
+
 ---
 
 ## Tensors and Autograd
@@ -245,6 +341,11 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Inverted dropout for 1D/2D inputs.  
   - `p`: drop probability in [0,1]; `seed`: reproducible masks; `training`: initial mode.  
   - Training zeros elements with prob `p` and scales by `1/(1-p)`; eval is identity. Buffers store `p`, `seed`, `training`.
+
+- **Dropout2d(p=0.5, seed=None, training=True)**  
+  - Spatial (channel-wise) inverted dropout for 4D inputs `(B, C, H, W)`.  
+  - Drops whole feature maps per sample (one Bernoulli decision per `(B, C)` channel map), then scales survivors by `1/(1-p)`.  
+  - Best used in convolutional blocks before flattening; eval mode is identity. Buffers store `p`, `seed`, `training`.
 
 - **BatchNorm1d(num_features, eps=1e-5, momentum=0.1, gamma=None, beta=None, running_variance=None, running_mean=None, training=True)**  
   - Normalizes `(B, F)` inputs per feature.  

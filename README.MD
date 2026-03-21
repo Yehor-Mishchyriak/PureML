@@ -43,6 +43,7 @@ The only runtime deps are: `numpy`, `zarr`
   - MaxPool1D: Added 1D max pooling with stride, padding, and dilation.
   - MeanPool2D: Added 2D average pooling with stride, padding, and dilation.
   - MaxPool2D: Added 2D max pooling with stride, padding, and dilation.
+  - Dropout2d: Added spatial dropout for 4D tensors (`B, C, H, W`) that drops full feature maps per sample during training and acts as identity in eval mode.
   - BatchNorm2d: Added batch normalization for 4D image tensors (`B, C, H, W`).
   - LayerNorm1d: Added layer normalization over the feature axis with optional bias.
 - **Clear development protocols:**

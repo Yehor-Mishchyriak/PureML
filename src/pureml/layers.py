@@ -704,6 +704,140 @@ class Dropout(Layer):
         _logger.debug("Dropout __call__: output Tensor created with shape=%s", getattr(out.data, "shape", None))
         return out
 
+class Dropout2d(Layer):
+    """Spatial (channel-wise) inverted dropout for 4D feature maps.
+
+    During training, each channel is dropped independently for every sample in
+    ``(B, C, H, W)`` input. If a channel is dropped, all its spatial values
+    are set to zero. Surviving channels are scaled by ``1/(1-p)`` so expected
+    activation magnitude stays constant. In eval mode, this is an identity map.
+
+    Args:
+        p (float): Drop probability in [0, 1]. Defaults to 0.5.
+        seed (int | None): Optional RNG seed for reproducibility.
+        training (bool): If True, applies dropout; otherwise acts as identity.
+                         Defaults to True.
+    """
+
+    def __init__(self, p: float = 0.5, *, seed: int | None = None, training: bool = True) -> None:
+        super().__init__(training=training)
+        if not (0.0 <= float(p) <= 1.0):
+            raise ValueError(f"Dropout p must be in [0, 1], got {p}")
+        self.p: float = float(p)
+        self._rng, self.seed = rng_from_seed(seed)
+        _logger.debug("Dropout2d initialized: p=%.4f, training=%s, seed=%s",
+              self.p, self.training, self.seed)
+
+    def on_mode_change(self, training: bool):
+        """Hook invoked when ``training`` flips.
+
+        Used here only for logging; no state is altered beyond the mode itself.
+        """
+        if training:
+            _logger.debug("Dropout2d set to training mode")
+        else:
+            _logger.debug("Dropout2d set to inference mode")
+
+    @property
+    def parameters(self) -> tuple[Tensor, ...]:
+        return ()  # no trainables
+
+    def named_buffers(self) -> dict[str, np.ndarray]:
+        """Return non-trainable buffers for serialization.
+
+        Returns:
+            dict[str, np.ndarray]: A mapping with:
+                - ``"p"``: drop probability as ``float64``
+                - ``"seed"``: RNG seed as ``uint64`` (0 if unset)
+                - ``"training"``: mode flag as ``int8`` (1 train, 0 eval)
+        """
+        seed_val = 0 if self.seed is None else self.seed
+        return {
+            "p":        np.asarray(float(self.p), dtype=np.float64),
+            "seed":     np.asarray(seed_val, dtype=np.uint64),
+            "training": np.asarray(int(self.training), dtype=np.int8),
+        }
+    
+    def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Restore dropout configuration from buffers.
+
+        Args:
+            tunable: Unused (dropout has no trainable parameters).
+            buffers: Optional mapping with keys:
+                - ``"p"`` (float): drop probability in ``[0, 1]``
+                - ``"training"`` (int/bool): set module mode
+                - ``"seed"`` (int): resets the RNG used to sample masks"""
+        self._validate_contract()
+        if buffers:
+            if "p" in buffers:
+                self.p = float(np.asarray(buffers["p"]).item())
+            if "training" in buffers:
+                self.training = bool(int(np.asarray(buffers["training"]).item()))
+            if "seed" in buffers:
+                seed_val = int(np.asarray(buffers["seed"]).item())
+                self.seed = seed_val
+                self._rng, _ = rng_from_seed(seed_val)
+
+    @staticmethod
+    def _dropout(X: np.ndarray, mask: np.ndarray, scale: np.ndarray, *, context: dict | None = None) -> np.ndarray:
+        """Forward: channel-wise masked scaling on ``(B, C, H, W)`` tensors."""
+        _logger.debug(
+            "Dropout2d forward: X.shape=%s, mask.shape=%s, scale=%s",
+            getattr(X, "shape", None), getattr(mask, "shape", None), getattr(scale, "item", lambda: scale)()
+        )
+
+        _update_ctx(context, mask=mask, scale=scale)
+
+        return X * (mask * scale) 
+
+    @staticmethod
+    @_shape_safe_grad
+    def _dropout_grad(upstream_grad: np.ndarray, X: np.ndarray, mask: np.ndarray, scale: np.ndarray, *, context: dict | None = None):
+        """Backward: dL/dX = upstream * mask * scale. No grads for mask/scale."""
+        _logger.debug(
+            "Dropout2d backward: upstream_grad.shape=%s, X.shape=%s, mask.shape=%s, scale=%s",
+            getattr(upstream_grad, "shape", None), getattr(X, "shape", None),
+            getattr(mask, "shape", None), getattr(scale, "item", lambda: scale)()
+        )
+        grad_X = upstream_grad * (mask * scale)
+        return grad_X, None, None
+
+    def __call__(self, X: Tensor) -> Tensor:
+        """Apply channel-wise dropout to ``X`` in training mode.
+
+        Supports 4D inputs shaped ``(B, C, H, W)``.
+        """
+        if not isinstance(X, Tensor):
+            raise TypeError(f"Dropout2d expects a Tensor, got {type(X)}")
+
+        x = X.data
+        if x.ndim != 4:
+            raise ValueError(f"Dropout2d only supports 4D inputs (B, C, H, W), got {x.ndim}D")
+
+        # Eval mode or p == 0 -> identity
+        if (not self.training) or (self.p <= 0.0):
+            _logger.debug("Dropout2d passthrough (eval mode or p<=0).")
+            return X
+
+        keep_p = 1.0 - self.p
+        if keep_p <= 0.0:
+            # degenerate case: drop everything
+            _logger.warning("Dropout2d p=1.0: output will be all zeros.")
+            mask_arr = np.zeros((x.shape[0], x.shape[1], 1, 1), dtype=x.dtype)
+            scale_arr = np.asarray(1.0, dtype=x.dtype)  # irrelevant cuz output is zero anyway
+        else:
+            # channel-wise Bernoulli mask (one value per batch/channel)
+            mask_arr = (self._rng.random((x.shape[0], x.shape[1], 1, 1)) < keep_p).astype(x.dtype, copy=False)
+            scale_arr = np.asarray(1.0 / keep_p, dtype=x.dtype)
+
+        # wrap mask/scale as non-trainable Tensors so the autograd context saves them
+        mask = Tensor(mask_arr, requires_grad=False)
+        scale = Tensor(scale_arr, requires_grad=False)
+
+        out = TensorValuedFunction(self._dropout, self._dropout_grad)(X, mask, scale)
+        _logger.debug("Dropout2d __call__: output Tensor created with shape=%s", getattr(out.data, "shape", None))
+        return out
+
 class BatchNorm1d(Layer):
     """Batch Normalization for 2D inputs shaped (B, F).
 
@@ -2657,6 +2791,7 @@ __all__ = [
     "Layer",
     "Affine",
     "Dropout",
+    "Dropout2d",
     "BatchNorm1d",
     "BatchNorm2d",
     "LayerNorm1d",

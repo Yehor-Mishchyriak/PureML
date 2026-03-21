@@ -70,7 +70,7 @@ print(f"Test accuracy: {acc * 100}")
 
 ```python
 from pureml.base import NN
-from pureml.layers import Conv2D, MaxPool2D, Affine, BatchNorm2d, Dropout, output_shape_2d
+from pureml.layers import Conv2D, MaxPool2D, Affine, BatchNorm2d, Dropout, Dropout2d, output_shape_2d
 from pureml.activations import relu
 from pureml import Tensor, no_grad
 from pureml.training_utils import DataLoader
@@ -107,9 +107,10 @@ class ConvNet(NN):
         self.conv3 = Conv2D(in_channels=64, out_channels=128, **conv_kwargs)
         H, W = output_shape_2d(H_in=H, W_in=W, **conv_kwargs)
         self.bn3 = BatchNorm2d(128)
+        self.dropout2d = Dropout2d(p=0.1)
         # FC Layer 4:
         self.fc1 = Affine(128*H*W, 320, bias=False)
-        # Dropout layer:
+        # Dropout layer (fully connected block):
         self.dropout = Dropout(p=0.25)
         # FC Layer 5:
         self.fc2 = Affine(320, 10, bias=False)
@@ -129,6 +130,7 @@ class ConvNet(NN):
         X = self.conv3(X)
         X = relu(X)
         X = self.bn3(X)
+        X = self.dropout2d(X)
         # ---------------
         X = X.flatten()
         X = self.fc1(X)
@@ -339,6 +341,11 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
   - Inverted dropout for 1D/2D inputs.  
   - `p`: drop probability in [0,1]; `seed`: reproducible masks; `training`: initial mode.  
   - Training zeros elements with prob `p` and scales by `1/(1-p)`; eval is identity. Buffers store `p`, `seed`, `training`.
+
+- **Dropout2d(p=0.5, seed=None, training=True)**  
+  - Spatial (channel-wise) inverted dropout for 4D inputs `(B, C, H, W)`.  
+  - Drops whole feature maps per sample (one Bernoulli decision per `(B, C)` channel map), then scales survivors by `1/(1-p)`.  
+  - Best used in convolutional blocks before flattening; eval mode is identity. Buffers store `p`, `seed`, `training`.
 
 - **BatchNorm1d(num_features, eps=1e-5, momentum=0.1, gamma=None, beta=None, running_variance=None, running_mean=None, training=True)**  
   - Normalizes `(B, F)` inputs per feature.  

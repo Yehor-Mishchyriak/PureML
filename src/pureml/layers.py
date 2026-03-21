@@ -882,12 +882,17 @@ class BatchNorm1d(Layer):
         return out
 
 class BatchNorm2d(Layer):
-    """Batch Normalization for 4D NCHW inputs shaped ``(B, C, H, W)``.
+    """Batch normalization for image-like tensors.
 
-    This class reuses :class:`BatchNorm1d` by flattening spatial positions into
-    the batch axis:
+    Use this layer with inputs shaped ``(B, C, H, W)``, where ``C`` is the
+    number of channels. Typical usage is in convolutional models (e.g., after
+    `Conv2D` and before/after activation).
 
-    ``(B, C, H, W) -> (B*H*W, C) -> BN1d -> (B, C, H, W)``.
+    Behavior:
+      - In training mode, normalization uses current-batch statistics and
+        updates running statistics.
+      - In eval mode, normalization uses stored running statistics for
+        deterministic inference.
     """
 
     def __init__(
@@ -902,6 +907,18 @@ class BatchNorm2d(Layer):
         running_mean: Tensor | None = None,
         training: bool = True,
     ) -> None:
+        """Create a BatchNorm2d layer.
+
+        Args:
+            num_features: Number of channels ``C`` in input ``(B, C, H, W)``.
+            eps: Small constant added for numerical stability.
+            momentum: Running-stat update factor.
+            gamma: Optional learnable per-channel scale tensor of shape ``(C,)``.
+            beta: Optional learnable per-channel shift tensor of shape ``(C,)``.
+            running_variance: Optional running variance buffer to resume from.
+            running_mean: Optional running mean buffer to resume from.
+            training: Initial mode (`True` for training, `False` for eval).
+        """
         super().__init__(training=training)
         self._bn1d = BatchNorm1d(
             num_features,
@@ -919,6 +936,7 @@ class BatchNorm2d(Layer):
         )
 
     def on_mode_change(self, training: bool):
+        """Keep normalization behavior in sync with model mode changes."""
         self._bn1d.training = bool(training)
         _logger.debug("BatchNorm2d mode changed: training=%s", bool(training))
 
@@ -959,13 +977,16 @@ class BatchNorm2d(Layer):
         return self._bn1d.parameters
 
     def named_buffers(self) -> dict[str, Tensor | np.ndarray]:
+        """Return non-trainable state used for checkpoint save/load."""
         return self._bn1d.named_buffers()
 
     def apply_state(self, *, tunable=(), buffers=None) -> None:
+        """Load trainable params and running stats from a checkpoint payload."""
         self._bn1d.apply_state(tunable=tunable, buffers=buffers)
         self._training = self._bn1d.training
 
     def __call__(self, X: Tensor) -> Tensor:
+        """Normalize an input tensor shaped ``(B, C, H, W)``."""
         x = X.data
         if x.ndim != 4 or x.shape[1] != self.num_features:
             raise ValueError(
@@ -975,9 +996,7 @@ class BatchNorm2d(Layer):
         B, C, H, W = x.shape
         _logger.debug("BN2d.__call__: training=%s, X.shape=%s", self.training, x.shape)
         flat = X.general_transpose((0, 2, 3, 1)).reshape(B * H * W, C)
-        # ^ ^ ^ transpose: (B, C, H, W) -> (B, H, W, C); reshape into (BHW, C)
         out = self._bn1d(flat).reshape(B, H, W, C).general_transpose((0, 3, 1, 2))
-        # ^ ^ ^ normalize the feature maps (C dim) and transpose back into the original shape
         _logger.debug("BN2d.__call__: out.shape=%s", getattr(out.data, "shape", None))
         return out
 
@@ -1336,6 +1355,131 @@ def _decode_text(val) -> str:
 
 def _L_out(L_in: int, p: int, d: int, kL: int, s: int) -> int:
     return floor((L_in + 2*p - d*(kL - 1) - 1) / s) + 1
+
+def _pair2d(v: int | tuple[int, int], *, name: str) -> tuple[int, int]:
+    """Normalize an int or 2-tuple into ``(h, w)`` form."""
+    if isinstance(v, int):
+        return (v, v)
+    if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
+        return v
+    raise TypeError(f"{name} must be int or tuple[int, int], got {v!r}")
+
+def _single(v: int | tuple[int]):
+    """Normalize an int or length-1 tuple into an int."""
+    if isinstance(v, int):
+        return v
+    if isinstance(v, tuple) and len(v) == 1 and isinstance(v[0], int):
+        return v[0]
+    raise TypeError(f"Expected int or tuple[int] of length 1, got {v!r}")
+
+def output_len_1d(
+        L_in: int,
+        kernel_size: int,
+        *,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1) -> int:
+    """Compute output length for 1D convolution/pooling style layers.
+
+    This uses the same size rule as ``Conv1D``, ``MaxPool1D``, and
+    ``MeanPool1D``.
+
+    Args:
+        L_in: Input length.
+        kernel_size: Kernel/window length.
+        stride: Step size between windows.
+        padding: Symmetric zero-padding on both sides.
+        dilation: Spacing between kernel taps.
+
+    Returns:
+        int: Output length ``L_out``.
+
+    Raises:
+        ValueError: If provided parameters are invalid or produce non-positive
+            output length.
+    """
+    L_in = int(L_in)
+    kernel_size = int(kernel_size)
+    stride = int(stride)
+    padding = int(padding)
+    dilation = int(dilation)
+
+    if L_in <= 0:
+        raise ValueError(f"L_in must be > 0, got {L_in}")
+    if kernel_size <= 0:
+        raise ValueError(f"kernel_size must be > 0, got {kernel_size}")
+    if stride <= 0:
+        raise ValueError(f"stride must be > 0, got {stride}")
+    if dilation <= 0:
+        raise ValueError(f"dilation must be > 0, got {dilation}")
+    if padding < 0:
+        raise ValueError(f"padding must be >= 0, got {padding}")
+
+    L_out = _L_out(L_in, padding, dilation, kernel_size, stride)
+    if L_out <= 0:
+        raise ValueError(
+            "Invalid output length. "
+            f"Got L_out={L_out} from input={L_in}, kernel={kernel_size}, "
+            f"stride={stride}, padding={padding}, dilation={dilation}."
+        )
+    return int(L_out)
+
+def output_shape_2d(
+        H_in: int,
+        W_in: int,
+        kernel_size: int | tuple[int, int],
+        *,
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] = 0,
+        dilation: int | tuple[int, int] = 1) -> tuple[int, int]:
+    """Compute output spatial size for 2D convolution/pooling style layers.
+
+    This uses the same size rule as ``Conv2D``, ``MaxPool2D``, and
+    ``MeanPool2D``.
+
+    Args:
+        H_in: Input height.
+        W_in: Input width.
+        kernel_size: Kernel/window size as int or ``(kH, kW)``.
+        stride: Step size as int or ``(sH, sW)``.
+        padding: Symmetric padding as int or ``(pH, pW)``.
+        dilation: Dilation as int or ``(dH, dW)``.
+
+    Returns:
+        tuple[int, int]: ``(H_out, W_out)``.
+
+    Raises:
+        TypeError: If any pair argument is not an int or ``tuple[int, int]``.
+        ValueError: If provided parameters are invalid or produce non-positive
+            output shape.
+    """
+    H_in = int(H_in)
+    W_in = int(W_in)
+    kH, kW = _pair2d(kernel_size, name="kernel_size")
+    sH, sW = _pair2d(stride, name="stride")
+    pH, pW = _pair2d(padding, name="padding")
+    dH, dW = _pair2d(dilation, name="dilation")
+
+    if H_in <= 0 or W_in <= 0:
+        raise ValueError(f"H_in and W_in must be > 0 (got {H_in=}, {W_in=})")
+    if kH <= 0 or kW <= 0:
+        raise ValueError(f"kernel_size entries must be > 0, got {(kH, kW)}")
+    if sH <= 0 or sW <= 0:
+        raise ValueError(f"stride entries must be > 0, got {(sH, sW)}")
+    if dH <= 0 or dW <= 0:
+        raise ValueError(f"dilation entries must be > 0, got {(dH, dW)}")
+    if pH < 0 or pW < 0:
+        raise ValueError(f"padding entries must be >= 0, got {(pH, pW)}")
+
+    H_out = _L_out(H_in, pH, dH, kH, sH)
+    W_out = _L_out(W_in, pW, dW, kW, sW)
+    if H_out <= 0 or W_out <= 0:
+        raise ValueError(
+            "Invalid output size. "
+            f"Got {(H_out, W_out)} from input={(H_in, W_in)}, kernel={(kH, kW)}, "
+            f"stride={(sH, sW)}, padding={(pH, pW)}, dilation={(dH, dW)}."
+        )
+    return int(H_out), int(W_out)
 
 def _unfold2d(
         X: np.ndarray, # (B, C, H, W)
@@ -1875,10 +2019,10 @@ class Conv2D(Layer):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = self._pair(kernel_size)
-        self.stride = self._pair(stride)
-        self.padding = self._pair(padding)
-        self.dilation = self._pair(dilation)
+        self.kernel_size = _pair2d(kernel_size, name="kernel_size")
+        self.stride = _pair2d(stride, name="stride")
+        self.padding = _pair2d(padding, name="padding")
+        self.dilation = _pair2d(dilation, name="dilation")
         self.pad_with = pad_with
 
         # trainable parameters
@@ -1929,13 +2073,6 @@ class Conv2D(Layer):
             self.use_bias, getattr(self.W, "shape", None), getattr(self.b, "shape", None)
         )
     
-    @staticmethod
-    def _pair(v: int | tuple[int, int]):
-        """Normalize an int or pair into a 2-tuple."""
-        if isinstance(v, int):
-            return (v, v)
-        return v
-
     @property
     def parameters(self) -> tuple[Tensor, ...]:
         """Return trainable parameters in layer order."""
@@ -2148,10 +2285,10 @@ class Conv1D(Layer):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = self._single(kernel_size)
-        self.stride = self._single(stride)
-        self.padding = self._single(padding)
-        self.dilation = self._single(dilation)
+        self.kernel_size = _single(kernel_size)
+        self.stride = _single(stride)
+        self.padding = _single(padding)
+        self.dilation = _single(dilation)
         self.pad_with = pad_with
 
         # trainable parameters
@@ -2201,15 +2338,6 @@ class Conv1D(Layer):
             self.kernel_size, self.stride, self.padding, self.dilation,
             self.use_bias, getattr(self.W, "shape", None), getattr(self.b, "shape", None)
         )
-
-    @staticmethod
-    def _single(v: int | tuple[int]):
-        """Normalize an int or length-1 tuple into an int."""
-        if isinstance(v, int):
-            return v
-        if isinstance(v, tuple) and len(v) == 1 and isinstance(v[0], int):
-            return v[0]
-        raise TypeError(f"Expected int or tuple[int] of length 1, got {v!r}")
 
     @property
     def parameters(self) -> tuple[Tensor, ...]:
@@ -2389,19 +2517,11 @@ class MaxPool2D(Layer):
         training: bool = True,
     ) -> None:
         super().__init__(training=training)
-        self.kernel_size = self._pair(kernel_size)
-        self.stride = self._pair(stride)
-        self.padding = self._pair(padding)
-        self.dilation = self._pair(dilation)
+        self.kernel_size = _pair2d(kernel_size, name="kernel_size")
+        self.stride = _pair2d(stride, name="stride")
+        self.padding = _pair2d(padding, name="padding")
+        self.dilation = _pair2d(dilation, name="dilation")
         self.pad_with = float(pad_with)
-
-    @staticmethod
-    def _pair(v: int | tuple[int, int]) -> tuple[int, int]:
-        if isinstance(v, int):
-            return (v, v)
-        if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
-            return v
-        raise TypeError(f"Expected int or tuple[int, int], got {v!r}")
 
     @property
     def parameters(self) -> tuple[Tensor, ...]:
@@ -2436,10 +2556,10 @@ class MeanPool2D(Layer):
         training: bool = True,
     ) -> None:
         super().__init__(training=training)
-        self.kernel_size = MaxPool2D._pair(kernel_size)
-        self.stride = MaxPool2D._pair(stride)
-        self.padding = MaxPool2D._pair(padding)
-        self.dilation = MaxPool2D._pair(dilation)
+        self.kernel_size = _pair2d(kernel_size, name="kernel_size")
+        self.stride = _pair2d(stride, name="stride")
+        self.padding = _pair2d(padding, name="padding")
+        self.dilation = _pair2d(dilation, name="dilation")
         self.pad_with = float(pad_with)
 
     @property
@@ -2543,6 +2663,8 @@ __all__ = [
     "Embedding",
     "unfold2d",
     "unfold1d",
+    "output_len_1d",
+    "output_shape_2d",
     "Conv2D",
     "Conv1D",
     "MaxPool2D",

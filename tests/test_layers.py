@@ -7,7 +7,7 @@ from pureml.machinery import Tensor
 from pureml.layers import (
     Layer, Affine, Dropout, BatchNorm1d, LayerNorm1d, Embedding,
     Conv1D, Conv2D, MaxPool1D, MeanPool1D, MaxPool2D, MeanPool2D, BatchNorm2d,
-    unfold1d, unfold2d
+    unfold1d, unfold2d, output_len_1d, output_shape_2d
 )
 from pureml.general_math import mean
 
@@ -1697,6 +1697,43 @@ class TestUnfold(ut.TestCase):
             _ = unfold2d(Tensor(np.zeros((1, 1, 4, 4))), (0, 3), (1, 1), (0, 0), (1, 1)) # bad kernel
         with self.assertRaises(ValueError):
             _ = unfold2d(Tensor(np.zeros((1, 1, 2, 2))), (5, 5), (1, 1), (0, 0), (1, 1)) # invalid output size
+
+class TestOutputShapeHelpers(ut.TestCase):
+    def test_output_len_1d_matches_common_cases(self):
+        self.assertEqual(output_len_1d(28, 3, stride=1, padding=1, dilation=1), 28)
+        self.assertEqual(output_len_1d(28, 2, stride=2, padding=0, dilation=1), 14)
+        self.assertEqual(output_len_1d(10, 3, stride=1, padding=2, dilation=2), 10)
+
+    def test_output_len_1d_validation(self):
+        with self.assertRaises(ValueError):
+            _ = output_len_1d(0, 3)
+        with self.assertRaises(ValueError):
+            _ = output_len_1d(8, 0)
+        with self.assertRaises(ValueError):
+            _ = output_len_1d(8, 3, stride=0)
+        with self.assertRaises(ValueError):
+            _ = output_len_1d(8, 3, padding=-1)
+        with self.assertRaises(ValueError):
+            _ = output_len_1d(2, 5, stride=1, padding=0, dilation=1)
+
+    def test_output_shape_2d_matches_common_cases(self):
+        self.assertEqual(output_shape_2d(28, 28, 3, stride=1, padding=1, dilation=1), (28, 28))
+        self.assertEqual(output_shape_2d(28, 28, 2, stride=2, padding=0, dilation=1), (14, 14))
+        self.assertEqual(output_shape_2d(7, 7, (3, 3), stride=(1, 1), padding=(0, 0), dilation=(1, 1)), (5, 5))
+
+    def test_output_shape_2d_validation(self):
+        with self.assertRaises(TypeError):
+            _ = output_shape_2d(10, 10, (3,))
+        with self.assertRaises(TypeError):
+            _ = output_shape_2d(10, 10, 3, stride=(1, 2, 3))
+        with self.assertRaises(ValueError):
+            _ = output_shape_2d(0, 10, 3)
+        with self.assertRaises(ValueError):
+            _ = output_shape_2d(10, 10, (0, 3))
+        with self.assertRaises(ValueError):
+            _ = output_shape_2d(10, 10, 3, padding=(-1, 0))
+        with self.assertRaises(ValueError):
+            _ = output_shape_2d(2, 2, (5, 5), stride=1, padding=0, dilation=1)
 
 
 if __name__ == "__main__":

@@ -291,6 +291,22 @@ Common interface: `.parameters` (trainables), `.named_buffers()` (non-trainable 
     - `W_out = floor((W + 2*pW - dW*(kW - 1) - 1) / sW) + 1`  
   - Backward pass uses scatter-add into padded input space, then crops back to `(B, C, H, W)`.
 
+### Output-shape helpers
+
+- `output_len_1d(L_in, kernel_size, stride=1, padding=0, dilation=1)`  
+  - Returns `L_out` for Conv1D/MaxPool1D/MeanPool1D-compatible settings.
+  - Uses the same formula as the 1D layers:
+    - `L_out = floor((L_in + 2*pL - dL*(kL - 1) - 1) / sL) + 1`
+  - Raises a clear error when arguments are invalid or produce non-positive output length.
+
+- `output_shape_2d(H_in, W_in, kernel_size, stride=1, padding=0, dilation=1)`  
+  - Returns `(H_out, W_out)` for Conv2D/MaxPool2D/MeanPool2D-compatible settings.
+  - Accepts `int` or `(h, w)` tuples for `kernel_size`, `stride`, `padding`, and `dilation`.
+  - Uses the same formulas as the 2D layers:
+    - `H_out = floor((H_in + 2*pH - dH*(kH - 1) - 1) / sH) + 1`
+    - `W_out = floor((W_in + 2*pW - dW*(kW - 1) - 1) / sW) + 1`
+  - Raises a clear error when arguments are invalid or produce non-positive output size.
+
 ---
 
 ## General Math (`pureml.general_math`)

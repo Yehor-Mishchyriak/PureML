@@ -37,28 +37,28 @@ The only runtime deps are: `numpy`, `zarr`
 
 ## v1.2.9 — What’s new
 - **New layers:**
-  - Conv1D: Added unfold+matmul 1D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
-  - Conv2D: Added unfold+matmul 2D convolution with stride/padding/dilation, optional bias, configurable init (`xavier-glorot-normal`/`kaiming-normal`), optional `W`/`b` injection at init, and full state persistence (`named_buffers`/`apply_state`).
-  - MeanPool1D: Added unfold+reduce 1D average pooling (`mean` over local windows) with stride/padding/dilation and autograd support.
-  - MaxPool1D: Added unfold+reduce 1D max pooling with argmax-routed backward pass, including overlap-safe gradient accumulation.
-  - MeanPool2D: Added unfold+reduce 2D average pooling (`mean` over local windows) with stride/padding/dilation and autograd support.
-  - MaxPool2D: Added unfold+reduce 2D max pooling with argmax-routed backward pass, including overlap-safe gradient accumulation.
-  - BatchNorm2d: Added channel-wise normalization for NCHW tensors by flattening spatial positions (`B*H*W`) per channel, with running-stat persistence and `apply_state` support.
-  - LayerNorm1d: Added normalization over the last feature axis with learnable `gamma`/`beta`, optional bias, and full state persistence (`eps`/`use_bias`).
+  - Conv1D: Added 1D convolution with stride, padding, dilation, optional bias, and configurable initialization (`xavier-glorot-normal` / `kaiming-normal`).
+  - Conv2D: Added 2D convolution with stride, padding, dilation, optional bias, and configurable initialization (`xavier-glorot-normal` / `kaiming-normal`).
+  - MeanPool1D: Added 1D average pooling with stride, padding, and dilation.
+  - MaxPool1D: Added 1D max pooling with stride, padding, and dilation.
+  - MeanPool2D: Added 2D average pooling with stride, padding, and dilation.
+  - MaxPool2D: Added 2D max pooling with stride, padding, and dilation.
+  - BatchNorm2d: Added batch normalization for 4D image tensors (`B, C, H, W`).
+  - LayerNorm1d: Added layer normalization over the feature axis with optional bias.
 - **Clear development protocols:**
   - `CONTRIBUTING.md`: Added a detailed contributor guide covering architecture contracts, autodiff/layer/state protocols, branching model, and release workflow.
   - New validator functions used during development to aid codebase consistency.
 - **New weight initialization:**
-  - Kaiming normal initialization: Added fan-in He initialization with nonlinearity-aware gain (`relu`, `leaky_relu`, etc.) and enabled it in `Affine` via `method="kaiming-normal"`.
+  - Added Kaiming normal initialization and enabled it in `Affine` via `method="kaiming-normal"`.
 - **New activations:**
   - leaky_relu: Added elementwise LeakyReLU with configurable `negative_slope` (default `0.01`).
 - **Additional Tensor operations:**
-  - Tensor.dot: Added a shape-validated dot op with explicit VJPs for `1D·1D` and `2D·2D` cases (mixed-rank and invalid-shape inputs raise clear errors).
-  - Tensor.general_transpose: Added N-D axis permutation with backward support via cached inverse permutation.
-  - Tensor.squeeze: Removes size-1 dimensions from tensors (like NumPy `squeeze`) while keeping gradients correct.
-  - Tensor.unsqueeze: Inserts a size-1 dimension at a chosen axis (like NumPy `expand_dims`) while keeping gradients correct.
-  - unfold1d: Added autograd-aware 1D unfolding (`(B, C, L) -> (B, C*kL, L_out)`) with stride/padding/dilation and scatter-add backward.
-  - unfold2d: Added autograd-aware 2D unfolding (`(B, C, H, W) -> (B, C*kH*kW, H_out*W_out)`) with stride/padding/dilation and scatter-add backward.
+  - Tensor.dot: Added a shape-validated dot operation for `1D·1D` and `2D·2D`.
+  - Tensor.general_transpose: Added N-D axis permutation.
+  - Tensor.squeeze: Removes size-1 dimensions (like NumPy `squeeze`).
+  - Tensor.unsqueeze: Inserts size-1 dimensions (like NumPy `expand_dims`).
+  - unfold1d: Added 1D unfolding utility for sliding-window workflows.
+  - unfold2d: Added 2D unfolding utility for sliding-window workflows.
 - **Miscellaneous:**
   - calculate_gain: Added recommended gain computation for `Affine`/`Conv1D`/`Conv2D`, `sigmoid`, `tanh`, `relu`, and `leaky_relu` (with configurable negative slope).
   - BatchNorm1d state fix: checkpoints now persist and restore `eps`, `momentum`, `training`, and `num_features` (in addition to running stats), with validation on restore.

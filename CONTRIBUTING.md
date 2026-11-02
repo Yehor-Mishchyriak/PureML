@@ -3,7 +3,7 @@
 - Make sure to carefully read the [development protocols](#development-protocols).
 - Work on a feature branch based off your fork’s `development`.
 - Run tests locally: `python -m unittest discover -s tests`.
-- Open a focused Pull Request to `main` in the upstream repo. CI must pass before merge.
+- Open a focused Pull Request to `development` in the upstream repo, not `main`. CI must pass before merge.
 - Add/adjust tests when you change behavior and describe the rationale in the PR.
 
 ## Reporting Issues
@@ -31,6 +31,7 @@ This repository uses a **two-branch model**:
 
 ### `development`
 - Active development branch.
+- Contributor Pull Requests must target this branch.
 - New features, experiments, and refactors happen here.
 - Direct pushes are allowed.
 - CI may run for early feedback, but failures do **not** block work.

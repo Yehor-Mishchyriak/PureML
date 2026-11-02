@@ -485,6 +485,7 @@ Mode propagation matters for layers like Dropout/BatchNorm and for `MNIST_BEATER
 ## Evaluation (`pureml.evaluation`)
 
 - `accuracy(model, test_set, batch_size=32)`: top-1 accuracy.  
+- `confusion_matrix(model, test_set, classes, batch_size=32)`: integer counts with true labels on rows and predictions on columns, both in the explicit `classes` order. For example, `classes=[2, 0, 1]` puts class 2 first on both axes. Labels must be distinct integers; missing classes retain zero rows/columns and labels outside the list raise `ValueError`. Accepts class indices, logits/probabilities and one-hot targets like `accuracy`; score-column indices remain the class labels regardless of matrix ordering. Runs without gradients and restores the model's previous train/eval mode even after an error.
   - `model`: PureML model implementing `__call__/predict` and optional `train()/eval()`.  
   - `test_set`: Dataset yielding `(X, Y)`; Y can be one-hot or class indices.  
   - `batch_size`: DataLoader batch size.  

@@ -1,10 +1,12 @@
-# PureML Documentation
-
-![LOGO](https://raw.githubusercontent.com/Yehor-Mishchyriak/PureML/main/assets/PureML_Logo_cropped.png)
+<img src="https://raw.githubusercontent.com/Yehor-Mishchyriak/PureML/main/assets/PureML_Logo_cropped.png" alt="PureML logo" width="400">
 
 Tiny but powerful 100% NumPy-based deep learning framework with explicit autodiff and lightweight utilities.
 
 [![PyPI](https://img.shields.io/pypi/v/ym-pure-ml)](https://pypi.org/project/ym-pure-ml/) ![PyPI downloads](https://img.shields.io/pypi/dm/ym-pure-ml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Yehor-Mishchyriak/PureML/blob/main/LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![GitHub](https://img.shields.io/badge/GitHub-Repo-black?logo=github)](https://github.com/Yehor-Mishchyriak/PureML/) [![status](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff/status.svg)](https://joss.theoj.org/papers/3aa26bc026244dcf3a477bd74ce4c0ff) [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18277559-blue)](https://doi.org/10.5281/zenodo.18277559)
+
+<h2>Contents</h2>
+
+[TOC]
 
 ---
 
@@ -224,6 +226,7 @@ Use these when you need to explicitly control singleton dimensions (`size == 1`)
   - Useful for making shapes broadcast-compatible or adding channel/batch-style axes.
 
 When to use:
+
 - Remove trailing singleton dims from model outputs before loss/metrics.
 - Add a channel axis for convolution-style inputs.
 - Align shapes intentionally for broadcasting (instead of relying on accidental broadcasting).
@@ -261,6 +264,7 @@ out.backward()
 - `tanh(x: Tensor)`  
 - `softmax(x: Tensor, axis=-1)` - stable, axis-aware  
 - `log_softmax(x: Tensor, axis=-1)` - stable, axis-aware  
+
 All accept any shape; `axis` is the class dimension for softmax/log_softmax. Return Tensors and provide Jacobian-free backward passes.
 
 ---
@@ -429,7 +433,7 @@ All return Tensors with gradient support and honor the specified axis (negative 
 ### Dataset abstractions
 
 - **Dataset**: implement `__len__` and `__getitem__(int|slice)`.
-- **TensorDataset(*arrays_or_tensors)**: wraps aligned arrays/Tensors; `__getitem__` always returns a tuple of Tensors with `requires_grad=False` (tuple length matches the number of fields). Length is inferred from the first dimension.
+- **`TensorDataset(*arrays_or_tensors)`**: wraps aligned arrays/Tensors; `__getitem__` always returns a tuple of Tensors with `requires_grad=False` (tuple length matches the number of fields). Length is inferred from the first dimension.
 
 ### DataLoader
 
@@ -485,7 +489,6 @@ Mode propagation matters for layers like Dropout/BatchNorm and for `MNIST_BEATER
 ## Evaluation (`pureml.evaluation`)
 
 - `accuracy(model, test_set, batch_size=32)`: top-1 accuracy.  
-- `confusion_matrix(model, test_set, classes, batch_size=32)`: integer counts with true labels on rows and predictions on columns, both in the explicit `classes` order. For example, `classes=[2, 0, 1]` puts class 2 first on both axes. Labels must be distinct integers; missing classes retain zero rows/columns and labels outside the list raise `ValueError`. Accepts class indices, logits/probabilities and one-hot targets like `accuracy`; score-column indices remain the class labels regardless of matrix ordering. Runs without gradients and restores the model's previous train/eval mode even after an error.
   - `model`: PureML model implementing `__call__/predict` and optional `train()/eval()`.  
   - `test_set`: Dataset yielding `(X, Y)`; Y can be one-hot or class indices.  
   - `batch_size`: DataLoader batch size.  
@@ -506,11 +509,13 @@ opt.zero_grad()
 ```
 
 Common features:
+
 - Weight decay supports **coupled** L2 (`decoupled_wd=False` -> `g += wd * w`) and **decoupled** AdamW-style decay (`decoupled_wd=True` -> `w -= lr * wd * w`).
 - Slot states are lazily initialized per parameter (shape-checked) and persisted via `save_state(path)` / `load_state(path, strict=True)`. Saves a single `.pureml.zip` with meta `{"class", "n_params", "hypers"}` plus per-parameter slots and parameter snapshots.
 - `zero_grad()` sets every parameter’s `.grad` to `None`.
 
 Optimizers:
+
 - **SGD(model_params, lr, beta=0.0, weight_decay=0.0, decoupled_wd=True)**  
   - `lr`: learning rate; `beta`: momentum (0 disables momentum).  
   - `weight_decay`: L2; `decoupled_wd=True` applies AdamW-style decay, else coupled.  
@@ -526,6 +531,7 @@ Optimizers:
   - Slots: `_v` (first moment), `_r` (second moment), `_t` (step counter).
 
 Learning-rate schedulers (operate in-place on attached optimizer’s `lr`):
+
 - **StepLR(optim, step_size, gamma=0.1, last_step=-1)**: decay `lr *= gamma` every `step_size` steps. `last_step` lets you resume. `step(n)` advances by `n` (default 1).
 - **ExponentialLR(optim, gamma, last_step=-1)**: smooth per-step decay `lr *= gamma` each `step()`. `last_step` for resume.
 - **CosineAnnealingLR(optim, T_max, eta_min=0.0, last_step=-1)**: half-cosine from `base_lr` to `eta_min` over `T_max` steps (no restarts; lr stays at `eta_min` after `T_max`). `step(n)` advances by `n` and returns new lr.
@@ -535,10 +541,12 @@ Learning-rate schedulers (operate in-place on attached optimizer’s `lr`):
 ## Persistence backend (`pureml.util.ArrayStorage`)
 
 `ArrayStorage` wraps a Zarr v3 root group for storing multiple appendable arrays with metadata. Backends:
+
 - Local directory store `<name>.zarr` (read/write)
 - Read-only ZipStore `<name>.zip`
 
 Key methods:
+
 - `write(arrays, to_block_named, arrays_per_chunk=None)`: append arrays (same shape/dtype) along axis 0; sets chunk length per block (defaults to 10 if unset).
 - `read(from_block_named, ids=None)`: read all, a row, a slice, or an index tuple (copy).
 - `block_iter(from_block_named, step=1)`: chunked iteration along axis 0.
@@ -548,6 +556,7 @@ Key methods:
 - `compress_and_cleanup(output_pth, compression_level)`: contextmanager to write to a temp store then compress and remove the temp directory.
 
 Other utilities in `pureml.util`:
+
 - `batches_of(iterable, batch_size=-1, shuffle=False, out_as=list, ranges=False, inclusive_end=False, rng=None)`: flexible batching over sliceable or generic iterables; supports range mode (contiguous indices) when `shuffle=False`.
 - `compose_steps((fn, kwargs_or_None), ...)`: compose a pipeline of unary functions with keyword args.
 - `is_json_literal(x)`: checks if a value is JSON-safe for serialization.
@@ -558,6 +567,7 @@ Other utilities in `pureml.util`:
 ## Logging (`pureml.logging_util`)
 
 `configure_logging(logs_dir, file_level=logging.DEBUG, console_level=logging.WARNING)` sets up the root logger once with:
+
 - Timed rotating file handler (midnight rollover, 7 backups) writing to `logs_dir/pureml_<timestamp>.log`
 - Console handler with the same format
 

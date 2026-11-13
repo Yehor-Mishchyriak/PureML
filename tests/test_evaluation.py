@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from pureml.evaluation import confusion_matrix
+from pureml.evaluation import confusion_matrix, precision
 from pureml.machinery import Tensor, is_grad_enabled
 from pureml.training_utils import TensorDataset
 
@@ -89,3 +89,49 @@ class TestConfusionMatrix(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'shape'):
             confusion_matrix(model, data, [0, 1])
         self.assertTrue(model.training)
+
+
+class TestPrecision(unittest.TestCase):
+    def test_per_class(self):
+        model = LookupModel([0, 1, 1, 1, 2, 0])
+        data = TensorDataset(np.arange(6), np.array([0, 0, 1, 1, 2, 2]))
+        
+        result = precision(model, data, classes=[0, 1, 2], average=None)
+        np.testing.assert_allclose(result, [0.5, 2/3, 1.0])
+
+    def test_averaging_modes(self):
+        model = LookupModel([0, 1, 1, 1, 2, 0])
+        data = TensorDataset(np.arange(6), np.array([0, 0, 1, 1, 2, 2]))
+        
+        res_macro = precision(model, data, classes=[0, 1, 2], average="macro")
+        self.assertAlmostEqual(res_macro, 13/18)
+        
+        res_micro = precision(model, data, classes=[0, 1, 2], average="micro")
+        self.assertAlmostEqual(res_micro, 2/3)
+        
+        res_weighted = precision(model, data, classes=[0, 1, 2], average="weighted")
+        self.assertAlmostEqual(res_weighted, 13/18)
+
+    def test_zero_division(self):
+        model = LookupModel([0, 0, 0])
+        data = TensorDataset(np.arange(3), np.array([1, 1, 1]))
+        
+        res_0 = precision(model, data, classes=[0, 1], average=None, zero_division=0.0)
+        np.testing.assert_allclose(res_0, [0.0, 0.0])
+        
+        res_1 = precision(model, data, classes=[0, 1], average=None, zero_division=1.0)
+        np.testing.assert_allclose(res_1, [0.0, 1.0])
+        
+        with self.assertWarns(RuntimeWarning):
+            res_warn = precision(model, data, classes=[0, 1], average=None, zero_division="warn")
+            np.testing.assert_allclose(res_warn, [0.0, 0.0])
+
+    def test_invalid_parameters(self):
+        model = LookupModel([0])
+        data = TensorDataset(np.arange(1), np.array([0]))
+        
+        with self.assertRaisesRegex(ValueError, "average must be None, 'micro', 'macro', or 'weighted'"):
+            precision(model, data, classes=[0], average="invalid")
+            
+        with self.assertRaises(ValueError):
+            precision(model, data, classes=[0], zero_division="invalid")

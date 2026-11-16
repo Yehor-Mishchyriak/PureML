@@ -6,6 +6,7 @@ outputs as well as one-hot targets."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+import warnings
 from numbers import Integral
 
 import numpy as np
@@ -112,8 +113,85 @@ def confusion_matrix(
     return counts
 
 
+def precision(
+    mdl: BaseModel,
+    test_set: Dataset,
+    classes: Sequence[int],
+    zero_division: float | str = 0.0,
+    average: str | None = None,
+    batch_size: int = 32,
+) -> float | np.ndarray:
+    """Compute precision per class, or an aggregate across all classes.
+
+    A class's precision is its true-positive count divided by the number of
+    times it was predicted; both are read directly from the confusion matrix's
+    diagonal and column sums. A class with no predictions has ill-defined
+    precision and takes ``zero_division``.
+
+    ``average=None`` returns a per-class array ordered like the supplied
+    ``classes``, so entry ``i`` is the precision of ``classes[i]``. ``"micro"``
+    aggregates true positives and predicted counts over all classes into a
+    single float. ``"macro"`` is the unweighted mean of the per-class
+    precisions. ``"weighted"`` weights each per-class precision by its support
+    (the number of true instances); an empty dataset has undefined weighted
+    precision and returns ``zero_division``.
+
+    ``zero_division`` may be ``0.0``, ``1.0``, or ``"warn"``; ``"warn"``
+    behaves like ``0.0`` and additionally emits a ``RuntimeWarning``. It is
+    applied whenever a class has no predictions or the dataset is empty.
+    """
+
+    if zero_division not in (0.0, 1.0, "warn"):
+        raise ValueError("zero_division must be 0.0, 1.0, or 'warn'")
+    if zero_division == 0.0 or zero_division == "warn":
+        zero_division_val = 0.0
+    elif zero_division == 1.0:
+        zero_division_val = 1.0
+    if average not in (None, "micro", "macro", "weighted"):
+        raise ValueError("average must be None, 'micro', 'macro', or 'weighted'")
+    cm = confusion_matrix(mdl, test_set, classes, batch_size=batch_size)
+
+    tp_per_class = np.diag(cm)
+    predicted_per_class = np.sum(cm, axis=0)
+
+    if average == "micro":
+        total_tp = np.sum(tp_per_class)
+        total_predicted = np.sum(predicted_per_class)
+        if total_predicted == 0:
+            if zero_division == "warn":
+                warnings.warn(
+                    "Precision is ill-defined and being set to 0.0 due to no positive predictions.",
+                    RuntimeWarning,
+                )
+            return zero_division_val
+        return total_tp / total_predicted
+
+    precisions = np.zeros(len(classes), dtype=np.float64)
+    for i in range(len(classes)):
+        if predicted_per_class[i] == 0:
+            if zero_division == "warn":
+                warnings.warn(
+                    f"Precision for class {classes[i]} is ill-defined and "
+                    "being set to 0.0 due to no positive predictions.",
+                    RuntimeWarning,
+                )
+            precisions[i] = zero_division_val
+        else:
+            precisions[i] = tp_per_class[i] / predicted_per_class[i]
+    if average is None:
+        return precisions
+    elif average == "macro":
+        return np.mean(precisions)
+    elif average == "weighted":
+        support = np.sum(cm, axis=1)
+        total_support = np.sum(support)
+        if total_support == 0:
+            return zero_division_val
+        return float(np.sum(precisions * support) / total_support)
+
+
 __all__ = [
-    "accuracy", "confusion_matrix"
+    "accuracy", "confusion_matrix", "precision"
 ]
 
 if __name__ == "__main__":

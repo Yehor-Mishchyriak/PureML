@@ -112,6 +112,7 @@ def confusion_matrix(
                 mdl.eval()
     return counts
 
+
 def precision(
     mdl: BaseModel,
     test_set: Dataset,
@@ -187,6 +188,8 @@ def precision(
         if total_support == 0:
             return zero_division_val
         return float(np.sum(precisions * support) / total_support)
+
+
 __all__ = [
     "accuracy", "confusion_matrix", "precision"
 ]

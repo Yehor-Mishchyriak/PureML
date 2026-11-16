@@ -494,6 +494,17 @@ Mode propagation matters for layers like Dropout/BatchNorm and for `MNIST_BEATER
   - `batch_size`: DataLoader batch size.  
   Handles logits/probabilities `(B, C)` by argmax over last axis, or class indices `(B,)` directly. Temporarily switches the model to eval mode and restores the prior mode.
 
+- `precision(mdl, test_set, classes, zero_division=0.0, average=None, batch_size=32)` computes precision for single-label classification using `confusion_matrix`. Like `accuracy`, it accepts class-index predictions or logits/probabilities, and class-index or one-hot targets. Supply a nonempty sequence of distinct integer `classes` that includes every true and predicted label. Evaluation runs in batches without gradients and restores the model's previous train/eval mode.
+
+  The confusion matrix has true labels on rows and predicted labels on columns. For each class, divide its diagonal entry (correct predictions) by its column total (all predictions of that class).
+  - `average=None` returns a NumPy array of per-class scores in the supplied `classes` order.
+  - `average="micro"` divides the sum of the diagonal by the sum of the entire matrix. This equals top-1 accuracy on a nonempty dataset because each example contributes one prediction.
+  - `average="macro"` returns the arithmetic mean of the per-class scores, giving each listed class equal weight.
+  - `average="weighted"` averages the per-class scores using the row totals as weights. A row total is the number of true examples for that class, also called its *support*.
+  - `zero_division` controls the fallback for a class with no predictions and for an empty dataset. The numeric choices are `0.0` (the default) and `1.0`. The `"warn"` option uses `0.0` and emits a `RuntimeWarning` when the fallback is needed. Macro and weighted averaging use the per-class fallbacks. Micro uses the fallback when there are no predictions across all classes.
+
+  For example, if `classes=[0, 1]` and the confusion matrix is `[[6, 2], [0, 2]]`, the per-class scores are `[1.0, 0.5]`. Macro precision is `0.75`, micro precision is `0.80`, and weighted precision is `0.90` because the true class counts are `8` and `2`.
+
 ---
 
 ## Optimizers and Schedulers (`pureml.optimizers`)

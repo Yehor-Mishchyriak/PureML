@@ -6,6 +6,7 @@ from pureml.evaluation import confusion_matrix, precision
 from pureml.machinery import Tensor, is_grad_enabled
 from pureml.training_utils import TensorDataset
 
+from unittest.mock import Mock
 
 class LookupModel:
     def __init__(self, predictions, training=True):
@@ -127,11 +128,28 @@ class TestPrecision(unittest.TestCase):
             np.testing.assert_allclose(res_warn, [0.0, 0.0])
 
     def test_invalid_parameters(self):
-        model = LookupModel([0])
-        data = TensorDataset(np.arange(1), np.array([0]))
-        
-        with self.assertRaisesRegex(ValueError, "average must be None, 'micro', 'macro', or 'weighted'"):
+        model = Mock()
+        data = Mock()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "average must be None, 'micro', 'macro', or 'weighted'",
+        ):
             precision(model, data, classes=[0], average="invalid")
-            
+        model.assert_not_called()
+
         with self.assertRaises(ValueError):
             precision(model, data, classes=[0], zero_division="invalid")
+        model.assert_not_called()
+
+    def test_weighted_differs_from_macro(self):
+        model = LookupModel([0, 0, 0, 0, 1, 0, 1, 2, 2])
+        data = TensorDataset(np.arange(9), np.array([0, 0, 0, 0, 0, 1, 1, 2, 2]))
+
+        macro = precision(model, data, classes=[0, 1, 2], average="macro")
+        weighted = precision(model, data, classes=[0, 1, 2], average="weighted")
+
+        self.assertAlmostEqual(macro, 23 / 30)
+        self.assertAlmostEqual(weighted, 7 / 9)
+        self.assertNotAlmostEqual(macro, weighted)
+

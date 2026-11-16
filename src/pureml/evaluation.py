@@ -6,10 +6,10 @@ outputs as well as one-hot targets."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+import warnings
 from numbers import Integral
 
 import numpy as np
-import warnings
 
 from .base import BaseModel
 from .training_utils import Dataset, DataLoader
@@ -112,37 +112,71 @@ def confusion_matrix(
                 mdl.eval()
     return counts
 
-def precision(mdl: BaseModel, test_set: Dataset, classes: Sequence[int], zero_division: float|str = 0.0, average:str|None=None,batch_size: int = 32) -> float|np.ndarray:
-    cm = confusion_matrix(mdl, test_set, classes, batch_size=batch_size)
+def precision(
+    mdl: BaseModel,
+    test_set: Dataset,
+    classes: Sequence[int],
+    zero_division: float | str = 0.0,
+    average: str | None = None,
+    batch_size: int = 32,
+) -> float | np.ndarray:
+    """Compute precision per class, or an aggregate across all classes.
+
+    A class's precision is its true-positive count divided by the number of
+    times it was predicted; both are read directly from the confusion matrix's
+    diagonal and column sums. A class with no predictions has ill-defined
+    precision and takes ``zero_division``.
+
+    ``average=None`` returns a per-class array ordered like the supplied
+    ``classes``, so entry ``i`` is the precision of ``classes[i]``. ``"micro"``
+    aggregates true positives and predicted counts over all classes into a
+    single float. ``"macro"`` is the unweighted mean of the per-class
+    precisions. ``"weighted"`` weights each per-class precision by its support
+    (the number of true instances); an empty dataset has undefined weighted
+    precision and returns ``zero_division``.
+
+    ``zero_division`` may be ``0.0``, ``1.0``, or ``"warn"``; ``"warn"``
+    behaves like ``0.0`` and additionally emits a ``RuntimeWarning``. It is
+    applied whenever a class has no predictions or the dataset is empty.
+    """
 
     if zero_division not in (0.0, 1.0, "warn"):
         raise ValueError("zero_division must be 0.0, 1.0, or 'warn'")
     if zero_division == 0.0 or zero_division == "warn":
         zero_division_val = 0.0
     elif zero_division == 1.0:
-        zero_division_val = 1.0    
+        zero_division_val = 1.0
     if average not in (None, "micro", "macro", "weighted"):
         raise ValueError("average must be None, 'micro', 'macro', or 'weighted'")
-    
+    cm = confusion_matrix(mdl, test_set, classes, batch_size=batch_size)
+
+    tp_per_class = np.diag(cm)
+    predicted_per_class = np.sum(cm, axis=0)
+
     if average == "micro":
-        tp = np.sum(np.diag(cm))
-        fp = np.sum(cm) - tp
-        if tp + fp == 0:
+        total_tp = np.sum(tp_per_class)
+        total_predicted = np.sum(predicted_per_class)
+        if total_predicted == 0:
             if zero_division == "warn":
-                warnings.warn("Precision is ill-defined and being set to 0.0 due to no positive predictions.", RuntimeWarning)
-        if tp + fp == 0:
+                warnings.warn(
+                    "Precision is ill-defined and being set to 0.0 due to no positive predictions.",
+                    RuntimeWarning,
+                )
             return zero_division_val
-        return tp / (tp + fp)
+        return total_tp / total_predicted
+
     precisions = np.zeros(len(classes), dtype=np.float64)
     for i in range(len(classes)):
-        tp = cm[i, i]
-        fp = np.sum(cm[:, i]) - tp
-        if tp + fp == 0:
+        if predicted_per_class[i] == 0:
             if zero_division == "warn":
-                warnings.warn(f"Precision for class {classes[i]} is ill-defined and being set to 0.0 due to no positive predictions.", RuntimeWarning)
+                warnings.warn(
+                    f"Precision for class {classes[i]} is ill-defined and "
+                    "being set to 0.0 due to no positive predictions.",
+                    RuntimeWarning,
+                )
             precisions[i] = zero_division_val
         else:
-            precisions[i] = tp / (tp + fp)
+            precisions[i] = tp_per_class[i] / predicted_per_class[i]
     if average is None:
         return precisions
     elif average == "macro":
